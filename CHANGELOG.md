@@ -6,6 +6,123 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.85-rc.10] - 2026-05-26
+
+
+### Chores
+
+- Chore(github): remove duplicate uppercase PR template (#591)
+
+`.github/` contained two PR-template files differing only by case:
+
+  - PULL_REQUEST_TEMPLATE.md (467B, minimal, older)
+  - pull_request_template.md (2393B, detailed template added in #368,
+    includes coverage-gate guidance referenced by all current PRs)
+
+Git tracks both as separate blobs because it's case-sensitive, but
+case-insensitive filesystems (macOS/Windows, default) can only
+materialize one of them. Symptoms on those platforms:
+
+  - `git status` reports a permanent phantom "modified" file that
+    cannot be cleaned; `git checkout` just flips which casing is dirty.
+  - GitHub's template resolution is case-insensitive, so with two
+    candidates the rendered PR template is ambiguous.
+
+Linux/CI is unaffected (both files materialize fine), which is why
+this slipped past review when #368 landed.
+
+Keep the lowercase, detailed template; remove the uppercase stub.
+
+Co-authored-by: Claude Opus 4.7 (1M context) <noreply@anthropic.com> (3c750ac)
+
+
+
+### Documentation
+
+- Docs: redesign README Learn More as a visual blog showcase (#593)
+
+* docs: turn README Learn More into a visual blog showcase
+
+Replace the plain bulleted Learn More list with a card grid mirroring the
+Built With AgentField pattern: five blog posts (The AI Backend, IAM for AI
+Backends, and the three-part harness orchestration series) as clickable
+image cards with title + abstract + CTA. Docs links move to a Documentation
+subsection under the same heading to avoid duplicate-H2 anchors.
+
+Commits hero images locally under assets/blog/ and adds the three new harness
+posts to assets/utm-links.csv (existing blog/IAM UTM ids reused).
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+* docs: reorder Learn More cards - harness series first, foundational posts last
+
+Move The AI Backend and IAM for AI Backends to the bottom of the grid so the
+three-part harness orchestration series leads.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+* docs: add intro blurb under Learn More heading
+
+Add a one-line description above the blog card grid to soften the transition
+from heading to table and clarify the section's purpose.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: OG <oktaygoktas@users.noreply.github.com>
+Co-authored-by: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+Co-authored-by: Santosh kumar <29346072+santoshkumarradha@users.noreply.github.com> (155c2f3)
+
+
+
+### Fixed
+
+- Fix(ui/runs): truncate long error-category badges so they don't overflow the status cell (#594)
+
+* fix(ui/runs): cap error-category fallback label so it stays single-line
+
+When `root_error_category` is something other than the canonical seven
+slugs (e.g. a diagnostic message like "Agent Restart Orphaned: Tier2-Test
+Re-Registered With New Instance (was 38ffec8279...)"), the previous
+fallback echoed the raw string verbatim as the badge label. In a fixed-
+width status cell that meant multi-line wrapping that overflowed into
+adjacent rows.
+
+The fallback now produces a fixed "Unknown error" label whenever the raw
+category exceeds 24 chars, and surfaces the original string via a new
+`tooltip` field on `ExecutionErrorCategoryMeta` (`description` for known
+categories). Consumers can attach this to `title=` so hover still gives
+full detail.
+
+Adds four unit tests pinning the new behavior — nullish handling, known
+canonical category, short unknown category, and long free-form category.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+* fix(ui/runs): truncate error badge so it never overflows the status cell
+
+Both the Runs table status cell (w-44 = 11rem) and the StepDetail error
+box render the error-category badge with a fixed h-5 height. When the
+label runs long, the previous flex-wrap layout caused the badge to wrap
+across multiple lines and visually overflow into the row below — see
+screenshot on PR #N.
+
+Make the badge a single-line truncated pill in both places:
+- whitespace-nowrap + truncate + min-w-0 + a max-width bound
+- title={errorMeta.tooltip} so the full text is still discoverable
+- diagnostics link gets shrink-0 so the badge takes the slack first
+
+Combined with the parent commit's label cap, even a pathological 100+
+char `root_error_category` now renders as a single ellipsised pill that
+fits inside the 11rem column.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Opus 4.7 (1M context) <noreply@anthropic.com> (208205e)
+
 ## [0.1.85-rc.9] - 2026-05-25
 
 
