@@ -6,6 +6,67 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.89-rc.1] - 2026-06-04
+
+
+### Chores
+
+- Chore: update vulnerable transitive lockfiles (#613) (fb6398d)
+
+
+
+### Documentation
+
+- Docs(readme): video demo + restructure hero and prompt-to-production flow (#612)
+
+* docs(readme): video demo + restructure hero and prompt-to-production flow
+
+- Remove static hero image; embed GitHub-hosted video preview with caption
+- Merge title into single "AgentField — The AI Backend" heading
+- Lead with "Build it with a prompt" (curl install + /agentfield skill spec)
+- Restructure code example as "The DX you get" section
+- Collapse manual scaffolding (Python/Go/TS/Docker) into details block
+- Update assets/github hero.png to cinematic 21:9 typographic version
+  for future use (currently not referenced in README)
+
+* docs(readme): polish badges, tighten hero, add framework comparison table
+
+- Swap badge colors: muted-gold label-side (#8b7355) + dark value-side (#0c0b09)
+  so white text reads cleanly. Old gold-on-white values were low contrast.
+- Drop the horizontal rule after the harness banner — saves vertical space
+  and lets the description flow directly under the banner.
+- Replace "Is AgentField for you?" with a 6-row "How does AgentField compare?"
+  table. Covers LangChain/LangGraph, CrewAI, PydanticAI/OpenAI Agents SDK,
+  Temporal/workflow engines, n8n/Zapier, and custom platforms. Concise format
+  sourced from docs/learn/vs-frameworks; full link points there for depth.
+
+* docs(readme): swap video upload to renamed agentfield-quick-start asset
+
+* docs(readme): swap video to v2 with custom thumbnail frame
+
+* docs(readme): move framework comparison up + reframe as capability scoreboard
+
+- Insert "How AgentField fits in your stack" between manual-scaffolding
+  details block and What You Get section — the natural moment when readers
+  ask "how is this different from LangChain?" after seeing video + install + code
+- Reframe from defensive "reach for AgentField when..." into a category
+  positioning + capability matrix where AgentField is the only all-● column
+- Bold-● rows visually highlight unique capabilities: identity, audit,
+  harness orchestration, service discovery
+- Drop the old "How does AgentField compare?" section near the bottom
+  (replaced by the new placement above)
+
+Promotes the vs-frameworks comparison — currently the 4th most-clicked
+README link — to a position where it serves both researchers (find it
+without scrolling to the bottom) and installers (they hit install+code
+first, scroll past if convinced).
+
+* docs(readme): swap video to latest upload
+
+* Update README.md
+
+* Update README for REST API and SDK descriptions (99d5673)
+
 ## [0.1.88] - 2026-06-02
 
 ## [0.1.88-rc.2] - 2026-06-02
