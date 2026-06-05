@@ -6,6 +6,37 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.90-rc.1] - 2026-06-05
+
+
+### Chores
+
+- Chore(deps): bump hono (#617)
+
+Bumps the npm_and_yarn group with 1 update in the /examples/benchmarks/100k-scale/mastra-bench directory: [hono](https://github.com/honojs/hono).
+
+
+Updates `hono` from 4.12.18 to 4.12.23
+- [Release notes](https://github.com/honojs/hono/releases)
+- [Commits](https://github.com/honojs/hono/compare/v4.12.18...v4.12.23)
+
+---
+updated-dependencies:
+- dependency-name: hono
+  dependency-version: 4.12.23
+  dependency-type: indirect
+  dependency-group: npm_and_yarn
+...
+
+Signed-off-by: dependabot[bot] <support@github.com>
+Co-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com> (9af26cb)
+
+
+
+### Other
+
+- Fix multimedia provider DX (#619) (6b72438)
+
 ## [0.1.89] - 2026-06-04
 
 ## [0.1.89-rc.4] - 2026-06-04
