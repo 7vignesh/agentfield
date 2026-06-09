@@ -6,6 +6,121 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.91-rc.3] - 2026-06-09
+
+
+### Other
+
+- Fix get_logger returning agentfield.result_cache for all loggers (#635)
+
+* issue/fix-get-logger-name-bug: fix get_logger to respect name parameter using dictionary cache
+
+* chore: finalize repo for handoff
+
+* fix(logger): guard logger cache with a lock for thread-safe access
+
+The per-name logger cache introduced in this PR is shared mutable module
+state. `get_logger()` could insert into `_logger_cache` while
+`set_log_level()`/`set_cp_client()` iterate `.values()`, raising
+`RuntimeError: dictionary changed size during iteration`.
+
+Add a reentrant lock around all cache access. set_log_level/set_cp_client
+snapshot the values under the lock and apply outside it, so we never hold
+the lock during the loggers' own work. Addresses the thread-safety findings
+from the PR review.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+* test(logger): fix lint, isolate global logging state, cover concurrency
+
+Three issues in the new logger test:
+
+- Removed unused imports (`AgentFieldLogger`, `_global_log_level`) that
+  failed `ruff check` (F401) and broke CI lint on 3.10/3.11/3.12.
+- The fixture's `global _global_log_level = None` only rebound this
+  module's copy, never the real `agentfield.logger` global, so the level
+  reset silently did nothing. Reference the module so the reset bites.
+- `AgentFieldLogger` mutates the stdlib logging registry (adds a handler,
+  sets `propagate=False`). Those mutations outlived each test and leaked
+  across the session. The fixture now snapshots and restores the registry
+  so this file is order-independent and can't mute unrelated loggers.
+
+Also add a concurrency test exercising get_logger()/set_log_level() from
+several threads, locking in the thread-safety fix.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+* test(cancel): capture cancel log directly, not via caplog/root
+
+Fixing get_logger() to honour the requested name means get_logger()
+now creates the real "agentfield" logger, on which the SDK sets
+propagate=False. That stops every "agentfield.*" child (including the
+plain "agentfield.cancel" logger) from reaching the root logger — where
+pytest's `caplog` handler lives. The assertion only ever passed because
+the old singleton bug meant the real "agentfield" logger was usually
+never created, so this was silently order-dependent and failed once
+test_logger ran first.
+
+Attach a handler directly to the "agentfield.cancel" logger instead.
+It asserts the identical contract (an INFO "cancel-callback fired"
+record is emitted) but is independent of namespace propagation and
+suite ordering. Use getMessage() since no formatter runs to set
+record.message on a bare handler.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+* docs(logger): note set_log_level no longer implicitly creates a logger
+
+Document the behavior change flagged in review: set_log_level() now only
+records the level and updates cached loggers; it no longer creates the
+default logger as a side effect. New loggers pick up the stored level
+when created via get_logger().
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+* test(conftest): isolate execution-context state and drain leaked tasks
+
+A pre-existing flake surfaced on Python 3.12 CI: tests that rely on the
+agent / execution-context ContextVars (e.g.
+test_execute_with_tracking_registers_child_context) intermittently saw
+get_current_agent_instance() return None mid-test, skipping workflow
+registration (assert 0 == 1). The suite also leaked many fire-and-forget
+asyncio tasks across tests ("Task was destroyed but it is pending!").
+
+Add an autouse fixture that resets the agent/execution-context ContextVars
+around every test and best-effort drains tasks the test left pending, so
+ordering and stray tasks can't pollute later tests. All teardown work is
+guarded to never raise. Verified locally on 3.10 and 3.12: full suite
+green and the leaked-task warnings drop from dozens to zero.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+* fix(logger): forward structured logs to loggers created after set_cp_client
+
+set_cp_client() only mutated loggers already in the cache, so any logger
+created afterward kept the class default _cp_client=None and silently
+dropped all structured telemetry in _dispatch_to_cp(). The concrete victim
+is the agentfield.verification logger: it is created at module import time
+inside Agent.__init__ (lazy `from agentfield.verification import LocalVerifier`)
+which runs *after* set_cp_client(self.client), so under local_verification=True
+none of its execution logs ever reached the control plane.
+
+Mirror the existing _global_log_level pattern: record the client in a
+module-level _global_cp_client under the cache lock, and apply it to new
+loggers in get_logger(). Forwarding now works regardless of import/creation
+order. set_cp_client(None) detaches globally as well.
+
+Add regression tests covering loggers created after set_cp_client, the
+existing already-cached path, and the None reset; extend reset_logger_state
+to isolate the new global.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: SWE-AF <eng@agentfield.ai>
+Co-authored-by: Claude Opus 4.8 (1M context) <noreply@anthropic.com> (ccfde97)
+
 ## [0.1.91-rc.2] - 2026-06-09
 
 
