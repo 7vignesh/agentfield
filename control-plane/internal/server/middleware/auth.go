@@ -2,7 +2,6 @@ package middleware
 
 import (
 	"crypto/subtle"
-	"errors"
 	"net/http"
 	"strings"
 
@@ -12,18 +11,9 @@ import (
 // AuthConfig mirrors server configuration for HTTP authentication.
 type AuthConfig struct {
 	APIKey                  string
-	InsecureDisableAuth     bool
 	SkipPaths               []string
 	SkipPrefixes            []string
 	QueryAPIKeyAllowedPaths []string
-}
-
-// ValidateAPIKeyAuth rejects an implicit unauthenticated configuration.
-func ValidateAPIKeyAuth(config AuthConfig) error {
-	if config.APIKey == "" && !config.InsecureDisableAuth {
-		return errors.New("API key is required; set AGENTFIELD_API_KEY or explicitly set AGENTFIELD_INSECURE_DISABLE_AUTH=true")
-	}
-	return nil
 }
 
 // APIKeyAuth enforces API key authentication via header or bearer token.
@@ -38,8 +28,8 @@ func APIKeyAuth(config AuthConfig) gin.HandlerFunc {
 	}
 
 	return func(c *gin.Context) {
-		// Unauthenticated operation must be explicitly enabled at startup.
-		if config.APIKey == "" && config.InsecureDisableAuth {
+		// No auth configured, allow everything.
+		if config.APIKey == "" {
 			c.Next()
 			return
 		}
@@ -100,15 +90,6 @@ func APIKeyAuth(config AuthConfig) gin.HandlerFunc {
 		// handler before any payload work happens.
 		if strings.HasPrefix(c.Request.URL.Path, "/sources/") {
 			c.Next()
-			return
-		}
-
-		if config.APIKey == "" {
-			c.Set("auth_level", "public")
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
-				"error":   "unauthorized",
-				"message": "authentication required but API key is not configured on the server",
-			})
 			return
 		}
 
@@ -173,44 +154,20 @@ func queryAPIKeyAllowed(c *gin.Context, allowedPaths map[string]struct{}) bool {
 	return false
 }
 
-// AdminAuthConfig mirrors server configuration for admin token authentication.
-type AdminAuthConfig struct {
-	AdminToken               string
-	InsecureDisableAdminAuth bool
-}
-
-// ValidateAdminTokenAuth rejects an implicit unauthenticated admin configuration.
-func ValidateAdminTokenAuth(config AdminAuthConfig) error {
-	if config.AdminToken == "" && !config.InsecureDisableAdminAuth {
-		return errors.New("admin token is required when authorization is enabled; set AGENTFIELD_AUTHORIZATION_ADMIN_TOKEN or explicitly set AGENTFIELD_INSECURE_ADMIN_NO_TOKEN=true")
-	}
-	return nil
-}
-
 // AdminTokenAuth enforces a separate admin token for admin routes.
+// If adminToken is empty, the middleware is a no-op (falls back to global API key auth).
 // Admin tokens must be sent via the X-Admin-Token header only (not Bearer) to avoid
 // collision with the API key Bearer token namespace.
-func AdminTokenAuth(config AdminAuthConfig) gin.HandlerFunc {
+func AdminTokenAuth(adminToken string) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		// Unauthenticated admin operation must be explicitly enabled at startup.
-		if config.AdminToken == "" && config.InsecureDisableAdminAuth {
+		if adminToken == "" {
 			c.Next()
-			return
-		}
-
-		// Fail-closed: if the admin token is not configured and insecure mode
-		// was not explicitly enabled, reject all requests.
-		if config.AdminToken == "" {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
-				"error":   "unauthorized",
-				"message": "admin authentication required but admin token is not configured on the server",
-			})
 			return
 		}
 
 		token := c.GetHeader("X-Admin-Token")
 
-		if subtle.ConstantTimeCompare([]byte(token), []byte(config.AdminToken)) != 1 {
+		if subtle.ConstantTimeCompare([]byte(token), []byte(adminToken)) != 1 {
 			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
 				"error":   "forbidden",
 				"message": "admin token required for this operation (use X-Admin-Token header)",

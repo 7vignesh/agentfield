@@ -40,12 +40,10 @@ func TestNewAgentFieldServerCoversFallbacksAndOptionalServices(t *testing.T) {
 	cfg := baseConfigForDBTests()
 	cfg.UI.Enabled = false
 	cfg.API.Auth.APIKey = ""
-	cfg.API.Auth.InsecureDisableAuth = true
 	cfg.Features.Connector.Enabled = false
 	cfg.Features.DID.Enabled = true
 	cfg.Features.DID.KeyAlgorithm = "Ed25519"
 	cfg.Features.DID.Authorization.Enabled = true
-	cfg.Features.DID.Authorization.InsecureDisableAdminAuth = true
 	cfg.Features.DID.Authorization.Domain = ""
 	cfg.Features.DID.Authorization.TagApprovalRules.DefaultMode = "auto"
 	cfg.Features.DID.Authorization.AccessPolicies = []config.AccessPolicyConfig{
@@ -119,7 +117,6 @@ func TestStartAndStopCoverAdditionalBranches(t *testing.T) {
 	cfg.Features.DID.Enabled = false
 	cfg.Features.Connector.Enabled = false
 	cfg.API.Auth.APIKey = ""
-	cfg.API.Auth.InsecureDisableAuth = true
 	cfg.Features.Tracing.Enabled = true
 	cfg.Features.Tracing.Insecure = true
 	cfg.AgentField.LLMHealth.Enabled = true
@@ -166,7 +163,6 @@ func TestStartCoversRecoveryErrorBranches(t *testing.T) {
 	cfg.Features.DID.Enabled = false
 	cfg.Features.Connector.Enabled = false
 	cfg.API.Auth.APIKey = ""
-	cfg.API.Auth.InsecureDisableAuth = true
 
 	errStorage := &listAgentsStorage{stubStorage: newStubStorage(), err: errors.New("list failed")}
 	statusManager := services.NewStatusManager(errStorage, services.StatusManagerConfig{
@@ -222,7 +218,6 @@ func TestSetupRoutesFilesystemFallbackDistPath(t *testing.T) {
 	cfg.UI.Mode = "filesystem"
 	cfg.UI.DistPath = ""
 	cfg.API.Auth.APIKey = ""
-	cfg.API.Auth.InsecureDisableAuth = true
 	cfg.API.CORS = config.CORSConfig{}
 	cfg.Features.DID.Enabled = false
 	cfg.Features.Connector.Enabled = false
@@ -384,7 +379,6 @@ func TestSetupRoutesAgentFieldDIDRouteHandlesUninitializedService(t *testing.T) 
 	cfg := baseConfigForDBTests()
 	cfg.UI.Enabled = false
 	cfg.API.Auth.APIKey = ""
-	cfg.API.Auth.InsecureDisableAuth = true
 	cfg.Features.DID.Enabled = true
 	cfg.Features.Connector.Enabled = false
 
