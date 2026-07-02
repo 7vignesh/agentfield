@@ -20,8 +20,8 @@ func safeJSONRawMessage(data string, fallback string, context string) json.RawMe
 		return json.RawMessage(data)
 	}
 
-	// Log corruption warning with context
-	logger.Logger.Warn().Msgf("Corrupted JSON data detected in %s, using fallback. Data preview: %.100s", context, data)
+	// Log corruption warning with metadata only (no raw content to avoid leaking sensitive data)
+	logger.Logger.Warn().Str("context", context).Int("data_length", len(data)).Msg("Corrupted JSON data detected, using fallback")
 
 	// Return safe fallback with error indication
 	errorFallback := fmt.Sprintf(`{"error": "corrupted_json_data", "context": "%s", "preview": "%s"}`,

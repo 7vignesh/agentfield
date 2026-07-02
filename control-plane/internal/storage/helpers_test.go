@@ -110,7 +110,8 @@ func TestSafeJSONRawMessageAndMin(t *testing.T) {
 	require.Equal(t, "config-sync", decoded["context"])
 	require.Contains(t, decoded["preview"], `{"bad":`)
 
-	require.Contains(t, buf.String(), "Corrupted JSON data detected in config-sync")
+	require.Contains(t, buf.String(), "Corrupted JSON data detected, using fallback")
+	require.Contains(t, buf.String(), "config-sync")
 
 	require.Equal(t, 2, min(2, 9))
 	require.Equal(t, -3, min(4, -3))

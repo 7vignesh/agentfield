@@ -966,7 +966,6 @@ func (c *executionController) handleStatusUpdate(ctx *gin.Context) {
 	}
 
 	eventData := map[string]interface{}{
-		"result":   req.Result,
 		"error":    req.Error,
 		"progress": req.Progress,
 	}
@@ -974,6 +973,7 @@ func (c *executionController) handleStatusUpdate(ctx *gin.Context) {
 		eventData["status_reason"] = strings.TrimSpace(*req.StatusReason)
 	}
 	if !c.redactPayloads {
+		eventData["result"] = req.Result
 		if inputPayload := decodeJSON(updated.InputPayload); inputPayload != nil {
 			eventData["input"] = inputPayload
 		}
