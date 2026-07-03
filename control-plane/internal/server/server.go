@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -96,6 +97,8 @@ type AgentFieldServer struct {
 	kb         *knowledgebase.KB
 	// Native scope-aware RAG knowledge store (embed-on-write/search).
 	knowledgeService *knowledge.Service
+	// HTTP server for graceful shutdown support
+	httpServer *http.Server
 }
 
 // NewAgentFieldServer creates a new instance of the AgentFieldServer.
@@ -646,9 +649,16 @@ func (s *AgentFieldServer) Start() error {
 		return fmt.Errorf("failed to start admin gRPC server: %w", err)
 	}
 
-	// TODO: Implement WebSocket, gRPC
-	// Start HTTP server
-	return s.Router.Run(":" + strconv.Itoa(s.config.AgentField.Port))
+	// Start HTTP server (using net/http.Server for graceful shutdown support)
+	addr := ":" + strconv.Itoa(s.config.AgentField.Port)
+	s.httpServer = &http.Server{
+		Addr:    addr,
+		Handler: s.Router,
+	}
+	if err := s.httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	return nil
 }
 
 func (s *AgentFieldServer) startAdminGRPCServer() error {
@@ -728,7 +738,9 @@ func (s *AgentFieldServer) Stop() error {
 	}
 
 	// Stop health monitor service
-	s.healthMonitor.Stop()
+	if s.healthMonitor != nil {
+		s.healthMonitor.Stop()
+	}
 
 	// Stop execution cleanup service
 	if s.cleanupService != nil {
@@ -781,7 +793,27 @@ func (s *AgentFieldServer) Stop() error {
 		}
 	}
 
-	// TODO: Implement graceful shutdown for HTTP, WebSocket, gRPC
+	// TODO: Implement graceful shutdown for WebSocket
+
+	// Graceful shutdown of the HTTP server
+	if s.httpServer != nil {
+		var shutdownTimeout time.Duration
+		if s.config != nil {
+			shutdownTimeout = s.config.AgentField.ShutdownTimeout
+		}
+		if shutdownTimeout <= 0 {
+			shutdownTimeout = 30 * time.Second
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+		defer cancel()
+		if err := s.httpServer.Shutdown(ctx); err != nil {
+			logger.Logger.Error().Err(err).Msg("HTTP server shutdown timed out, forcing close")
+			_ = s.httpServer.Close()
+			return err
+		}
+		logger.Logger.Info().Msg("HTTP server shut down gracefully")
+	}
+
 	return nil
 }
 
