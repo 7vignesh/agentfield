@@ -6,6 +6,134 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.97-rc.4] - 2026-07-03
+
+
+### Chores
+
+- Chore: remove dead identity UI surface and unreferenced docker-perf config (#618)
+
+Salvage of the safe, zero-regression subset of #618. Removes genuinely dead
+code only:
+
+- control-plane/internal/handlers/ui/identity.go (+2 tests): the DID Explorer /
+  Credentials UI backend. Its sole frontend consumer (identityApi.ts) has no
+  callers, and the DID Explorer pages were already removed — App.tsx redirects
+  /identity/dids and /identity/credentials to /settings. No live consumer.
+- web/client/src/services/identityApi.ts (+ test): orphaned frontend service.
+- control-plane/config/docker-perf.yaml: unreferenced by any Makefile/CI/compose.
+
+Deliberately EXCLUDES the regression-inducing parts of the original PR:
+the /admin/public-key alias removal (breaks all-SDK offline VC verification),
+node lifecycle + /actions/claim endpoints, legacy reasoner execute endpoints,
+the broken root compose.yaml, and storage-mode/telemetry config flips.
+
+Validation: go build/vet clean; go test ./... green (control-plane); web-ui
+npm build clean; web-ui coverage 84.78% (baseline 84.79%, floor 84.0).
+
+Co-authored-by pocesar via original PR #618.
+
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com>
+Co-authored-by: Claude Opus 4.8 (1M context) <noreply@anthropic.com> (615baa6)
+
+## [0.1.97-rc.3] - 2026-07-03
+
+
+### Fixed
+
+- Fix(sdk-python): use AsyncConfig.from_environment() for client default async config (#714)
+
+AgentFieldClient constructed its default async_config with AsyncConfig(),
+ignoring AGENTFIELD_ASYNC_* environment overrides that Agent already honors.
+Initialize the default from AsyncConfig.from_environment() so client-level
+async behavior can be tuned via env vars, while preserving any explicitly
+passed async_config unchanged. Adds regression coverage for both paths.
+
+Fixes #621. Supersedes #632 (original change by liuzemei / neooosky);
+re-authored here so it can land without the outstanding CLA signature.
+
+Co-authored-by: Claude Opus 4.8 (1M context) <noreply@anthropic.com> (04756b8)
+
+## [0.1.97-rc.2] - 2026-07-03
+
+
+### Chores
+
+- Chore(deps): bump golang.org/x/net (#710)
+
+Bumps the go_modules group with 1 update in the /control-plane directory: [golang.org/x/net](https://github.com/golang/net).
+
+
+Updates `golang.org/x/net` from 0.52.0 to 0.55.0
+- [Commits](https://github.com/golang/net/compare/v0.52.0...v0.55.0)
+
+---
+updated-dependencies:
+- dependency-name: golang.org/x/net
+  dependency-version: 0.55.0
+  dependency-type: indirect
+  dependency-group: go_modules
+...
+
+Signed-off-by: dependabot[bot] <support@github.com>
+Co-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com> (bd5f8cc)
+
+## [0.1.97-rc.1] - 2026-07-02
+
+
+### Added
+
+- Feat(skill): generative orchestration theory for the agentfield skill (#708)
+
+* feat(skill): add mental-models layer to agentfield skill
+
+* feat(skill): rework thinking layer into generative orchestration theory
+
+The skill taught rules and a pattern vocabulary; an agent reading it could
+imitate reference builds but not derive an orchestration for a problem that
+looks like neither security auditing nor contract review. Patterns are
+outputs of thinking, not inputs.
+
+- mental-models.md: rewritten as the full generative theory — cognitive-job
+  decomposition, autonomy spectrum, seven-rung verification ladder,
+  six-rung dynamism ladder, quality escalation ladder, code-for-certainty +
+  archei data-flow rule; one invoice-intake example threads through it
+- SKILL.md: 'How to think' is now the five-step derivation procedure; the
+  five principles are reframed as consequences and a review checklist;
+  pattern-first design added to hard rejections (+18 lines vs main)
+- patterns-emerge.md: reframed as post-hoc naming; every named pattern
+  carries a derivation line from the ladders (HUNT->PROVE = rung 6 on a
+  parallel discovery layer, etc.)
+- anti-patterns.md: rejections that follow from the theory (rung below/above
+  the stakes, unjustified dynamism, pattern-first design, model-size-first)
+- verification.md and templates: 'verification ladder' now names the output
+  ladder; build proof renamed to build checks; stale 'five principles'
+  pointers updated
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+
+* chore(skill): bump agentfield skill to v0.5.0 and sync embedded copy
+
+The thinking-layer rework edited skills/agentfield/ (source of truth)
+but the binary embeds skill_data/agentfield/. Sync the mirror (adds
+mental-models.md, updates SKILL.md and references) and bump the catalog
+version 0.4.0 -> 0.5.0 so existing installs pick up the change on
+af skill install/update instead of being skipped as already-current.
+
+---------
+
+Co-authored-by: Claude Opus 4.8 <noreply@anthropic.com> (76fdf5e)
+
+
+
+### Documentation
+
+- Docs: credit integrations packs in comparison table (linked partial mark) (a709524)
+
+- Docs: sharpen vs-frameworks pitch (concede row, plain-words rows, second-caller rule) (2ea7c67)
+
+- Docs: scale-first README rewrite (fan-out hero sample, how-it-scales section, tutorial blog cards) (859174f)
+
 ## [0.1.96] - 2026-06-29
 
 ## [0.1.96-rc.1] - 2026-06-29
