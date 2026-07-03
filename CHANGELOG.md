@@ -6,6 +6,155 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.97-rc.8] - 2026-07-03
+
+
+### Added
+
+- Feat(share): af share — export & publish run artifacts (offline HTML + hosted permalinks) (#706)
+
+* feat(cli): af share exports self-contained run artifact (DAG, timeline, bundle v1)
+
+* fix(share): hide cost UI entirely when cost data is unavailable
+
+* feat(share): workflow share export endpoint + UI share button
+
+Add GET /api/ui/v1/workflows/{workflow_id}/share returning the same
+self-contained offline HTML artifact as `af share`, as an attachment
+(run-<id>.html, text/html). Supports ?redact=1.
+
+The share bundle/template package moves from internal/cli/share to
+internal/share so both the CLI and the new handler import it. The
+handler builds the bundle directly from the storage layer (the same
+execution records the DAG and execution-details UI handlers read),
+resolving payloads from the payload store when stored by URI — no
+internal HTTP round-trip and no per-execution fan-out.
+
+UI: a native Share button in the run detail action row (matching the
+Export provenance button style, Share2 icon from lucide-react) and a
+Share item in the runs-list lifecycle kebab menu. Both download via an
+authenticated fetch + anchor, honouring Content-Disposition.
+
+* feat(share): default --public to agentfield.ai
+
+`af share <id> --public` now publishes to agentfield.ai and prints the
+returned permalink (https://agentfield.ai/share/<token>) instead of erroring
+when AGENTFIELD_SHARE_URL is unset. Point that variable at a self-hosted
+share server to publish there instead.
+
+* test(web): cover run share menu action
+
+* fix(share): avoid script escape preallocation overflow
+
+* test(share): cover artifact export paths (6f17fac)
+
+
+
+### Chores
+
+- Chore(sdk-go): bump testify to v1.11.1 (#681) (0e48916)
+
+
+
+### Fixed
+
+- Fix(harness): stream output with idle watchdog and explicit stdin null (#695) (#696)
+
+* fix(harness): stream output with idle watchdog and explicit stdin null (#695)
+
+The CLI harness runner in all three SDKs blocked until the child exited and
+read output only at the end, so it could not apply a no-progress watchdog.
+A stalled opencode/OpenRouter streaming call froze the run up to the
+wall-clock cap (default 1800s) while holding a concurrency-semaphore slot.
+
+Python (sdk/python/agentfield/harness/_cli.py):
+- Stream stdout and stderr concurrently; track last-output time; kill the
+  process group and raise TimeoutError if no output arrives for idle_seconds
+  (env AGENTFIELD_HARNESS_IDLE_SECONDS, default 120; <= 0 disables).
+- Set stdin=DEVNULL and start_new_session=True. Wall-clock timeout kept.
+
+Go (sdk/go/harness/cli.go, cli_unix.go, cli_windows.go):
+- Switch from c.Run() buffers to StdoutPipe/StderrPipe drained in goroutines;
+  poll last-activity; kill the process group on idle. Set c.Stdin to an empty
+  reader and run the child in its own process group.
+
+TypeScript (sdk/typescript/src/harness/cli.ts):
+- Add an idle-watchdog interval over the existing data listeners; SIGKILL on
+  idle. Spawn with stdio ['ignore','pipe','pipe'] so the child's stdin gets EOF.
+
+All return shapes are unchanged, so JSONL parsing downstream is unaffected.
+Adds idle-watchdog and fast-command tests in each SDK.
+
+* fix(ai): retry .ai() LLM calls on wall-clock timeout (#695)
+
+The .ai() path raised TimeoutError on the asyncio safety-net timeout with no
+retry (rate-limit retry only covers 429/503). A stalled OpenRouter connection
+therefore failed the reasoner outright. Add a timeout-retry layer that reissues
+the call on a fresh client pool (the pool is already reset on timeout), bounded
+by AGENTFIELD_AI_TIMEOUT_RETRIES (default 2, 0 disables). Applies to both the
+plain and tool-loop .ai paths. Existing deadlock-recovery tests run with retries
+disabled; added tests cover the retry-recovers and retry-exhausts cases.
+
+* fix(ai): retry transient provider errors (malformed response, 5xx) on .ai() (#695)
+
+The .ai() timeout-retry now also covers transient provider glitches: a
+malformed 'Unable to get json response', a 5xx, or a dropped connection are
+retried on a fresh client pool, while permanent client errors (bad request,
+auth, model-not-found, unsupported-schema) propagate immediately. Observed live
+with glm-5.2 returning a garbage whitespace body that failed a reasoner outright. (05ae9eb)
+
+
+
+### Other
+
+- [codex] fix Python SDK decorator metadata duplication (#693)
+
+* fix python sdk decorator metadata duplication
+
+* preserve stacked reasoner metadata
+
+* unwrap reasoners for code origin
+
+* honor outer reasoner trigger opt in
+
+* honor staged trigger opt in
+
+* keep agent reasoner metadata local
+
+* fix(sdk-python): apply EventTrigger transform on canonical reasoner form (#693)
+
+The decorator-dedup refactor moved trigger merging into
+resolve_reasoner_metadata but stopped stamping _reasoner_triggers on the
+stored handler. As a result the runtime path (_execute_reasoner_endpoint)
+read no bindings for the canonical `@app.reasoner(triggers=[EventTrigger(
+..., transform=fn)])` form on a plain handler, so the declared transform
+was silently skipped and the handler received the raw event payload.
+
+Rather than re-stamping the function (which the PR deliberately dropped:
+bound methods reject setattr, and a shared function object registered on
+two agents would leak triggers between them), thread the merged bindings
+through _execute_reasoner_endpoint via the registration closure. This
+keeps the PR's agent-local metadata intent while restoring transform
+application at dispatch time.
+
+Adds a regression test that drives the real route -> envelope unwrap ->
+_execute_reasoner_endpoint path and asserts the handler receives the
+transformed object.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Santosh <santosh@agentfield.ai>
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com>
+Co-authored-by: Claude Opus 4.8 (1M context) <noreply@anthropic.com> (91d8f67)
+
+
+
+### Testing
+
+- Test(functional): fix docker-backed SDK test infra (#709) (b6f0292)
+
 ## [0.1.97-rc.7] - 2026-07-03
 
 
