@@ -13,12 +13,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Agent-Field/agentfield/control-plane/internal/sources"
 )
 
 type source struct{}
+
+const defaultToleranceSeconds = 300 // 5 minutes
 
 func init() {
 	sources.Register(&source{})
@@ -34,6 +38,8 @@ func (s *source) ConfigSchema() json.RawMessage {
         "properties":{
           "signature_header":{"type":"string","default":"X-Signature","description":"Header carrying the HMAC-SHA256 hex digest"},
           "signature_prefix":{"type":"string","default":"","description":"Optional prefix on the signature value, e.g. 'sha256='"},
+          "timestamp_header":{"type":"string","default":"","description":"Optional header carrying a Unix epoch timestamp for replay protection"},
+          "tolerance_seconds":{"type":"integer","minimum":0,"default":300,"description":"Max age in seconds for timestamp-based replay rejection. 0 disables."},
           "event_type_header":{"type":"string","default":"","description":"Optional header to copy into the event type"},
           "idempotency_header":{"type":"string","default":"","description":"Optional header to use as the idempotency key"}
         },
@@ -42,9 +48,11 @@ func (s *source) ConfigSchema() json.RawMessage {
 }
 
 type config struct {
-	SignatureHeader   string `json:"signature_header"`
-	SignaturePrefix   string `json:"signature_prefix"`
-	EventTypeHeader   string `json:"event_type_header"`
+	SignatureHeader  string `json:"signature_header"`
+	SignaturePrefix  string `json:"signature_prefix"`
+	TimestampHeader  string `json:"timestamp_header"`
+	ToleranceSeconds *int   `json:"tolerance_seconds"`
+	EventTypeHeader  string `json:"event_type_header"`
 	IdempotencyHeader string `json:"idempotency_header"`
 }
 
@@ -76,6 +84,28 @@ func (s *source) HandleRequest(ctx context.Context, req *sources.RawRequest, cfg
 		return nil, errors.New("generic_hmac: missing secret")
 	}
 	c := parseConfig(cfg)
+
+	// Enforce timestamp freshness if a timestamp header is configured.
+	if c.TimestampHeader != "" {
+		tsStr := req.Headers.Get(c.TimestampHeader)
+		if tsStr == "" {
+			return nil, fmt.Errorf("generic_hmac: missing timestamp header %q", c.TimestampHeader)
+		}
+		ts, err := strconv.ParseInt(tsStr, 10, 64)
+		if err != nil {
+			return nil, errors.New("generic_hmac: timestamp is not a valid Unix epoch")
+		}
+		tolerance := defaultToleranceSeconds
+		if c.ToleranceSeconds != nil {
+			tolerance = *c.ToleranceSeconds
+		}
+		if tolerance > 0 {
+			diff := time.Now().Unix() - ts
+			if diff > int64(tolerance) || diff < -int64(tolerance) {
+				return nil, errors.New("generic_hmac: timestamp outside tolerance window")
+			}
+		}
+	}
 
 	provided := req.Headers.Get(c.SignatureHeader)
 	if provided == "" {
