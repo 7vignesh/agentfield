@@ -76,6 +76,9 @@ func (s *source) Validate(cfg json.RawMessage) error {
 	if err := json.Unmarshal(cfg, &c); err != nil {
 		return fmt.Errorf("invalid generic_hmac config: %w", err)
 	}
+	if c.ToleranceSeconds != nil && *c.ToleranceSeconds < 0 {
+		return errors.New("invalid generic_hmac config: tolerance_seconds must be >= 0")
+	}
 	return nil
 }
 
@@ -87,7 +90,7 @@ func (s *source) HandleRequest(ctx context.Context, req *sources.RawRequest, cfg
 
 	// Enforce timestamp freshness if a timestamp header is configured.
 	if c.TimestampHeader != "" {
-		tsStr := req.Headers.Get(c.TimestampHeader)
+		tsStr := strings.TrimSpace(req.Headers.Get(c.TimestampHeader))
 		if tsStr == "" {
 			return nil, fmt.Errorf("generic_hmac: missing timestamp header %q", c.TimestampHeader)
 		}

@@ -442,7 +442,8 @@ func (c *webhookApprovalController) verifySignature(body []byte, signature strin
 	// Try hax-sdk format: "t=timestamp,v1=signature"
 	if ts, sig, ok := parseHaxSignature(signature); ok {
 		// Enforce timestamp freshness to prevent replay attacks.
-		// Reject if timestamp is more than 5 minutes old or in the future.
+		// Hard-coded to 5 minutes; making this configurable would require
+		// plumbing config through the handler constructor (future enhancement).
 		if tsInt, err := strconv.ParseInt(ts, 10, 64); err == nil {
 			diff := time.Now().Unix() - tsInt
 			const maxSkewSeconds = 300 // 5 minutes

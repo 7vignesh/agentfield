@@ -77,6 +77,15 @@ func TestGenericHMAC_MetadataValidateAndDefaults(t *testing.T) {
 	if parsed.SignatureHeader != "X-Signature" {
 		t.Fatalf("empty signature header should default, got %q", parsed.SignatureHeader)
 	}
+
+	// Validate rejects negative tolerance_seconds
+	if err := s.Validate([]byte(`{"tolerance_seconds": -1}`)); err == nil {
+		t.Fatal("expected error for negative tolerance_seconds")
+	}
+	// Validate accepts zero tolerance_seconds
+	if err := s.Validate([]byte(`{"tolerance_seconds": 0}`)); err != nil {
+		t.Fatalf("expected zero tolerance_seconds to be valid, got %v", err)
+	}
 }
 
 func TestGenericHMAC_CustomHeaderAndPrefix(t *testing.T) {
