@@ -6,6 +6,88 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.98-rc.4] - 2026-07-06
+
+
+### Added
+
+- Feat(sdk-go): production-harden serverless agent nodes (Lambda-ready, auth-visible, restart-safe) (#719)
+
+A deployment_type:"serverless" node is a pull-registered, stateless HTTP
+handler - the same request/response contract AWS Lambda (via a Function
+URL), Cloud Run, Cloud Functions 2nd gen, and Fly.io all speak. That means
+the same Go reasoner should drop into any of them with zero SDK changes,
+but four real gaps broke that promise for a first-time adopter:
+
+- The Go SDK had no /status endpoint, so the control plane's health
+  monitor 404s polling it; serverless nodes (no heartbeat by design) have
+  nothing to mask this and flip to Inactive on the first check.
+- HealthMonitor.RecoverFromDatabase re-subjects every node, serverless
+  included, to that polling after a control-plane restart - the one time
+  live registration never does.
+- Origin auth defaults off with no visibility into which registered nodes
+  have it on - a Lambda Function URL is public by default.
+- The bundled serverless example's relay reasoner forwarded its payload
+  under the wrong key, silently dropping the message on every parent-to-
+  child hop.
+
+Closes Agent-Field/agentfield#718. (e16987a)
+
+## [0.1.98-rc.3] - 2026-07-06
+
+
+### Fixed
+
+- Fix(sdk): GLM-5.2 context limits + reasoning-model empty-output retry (#722)
+
+- _MODEL_CONTEXT_LIMITS: add openrouter/z-ai/glm-5.2 and z-ai/glm-5.2 at
+  131072. Absent entries fell back to 10,192 tokens and the trimmer cut
+  68% of large prompts (verified live: whole context blocks dropped).
+- AgentAI.ai: when parsed structured output is empty/default-only AND the
+  response carries reasoning_content (reasoning model spent the whole
+  completion budget on hidden reasoning), retry once with max_tokens
+  doubled instead of silently returning the empty instance.
+
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com> (0f9cc60)
+
+- Fix(sdk-go): make agent outbound call timeout configurable (#721)
+
+agent.New() hardcoded a 15s timeout on the http.Client used for every
+outbound call the agent makes as a client (cross-agent Call(), the
+control-plane memory backend). Any reasoner chained behind Call() that
+legitimately takes longer - most visibly a reasoning-model-backed
+reasoner doing search + a large max_tokens "thinking" response -
+fails the caller with a client-side context-deadline-exceeded error
+while the callee keeps running and completes successfully on its own,
+with no way to fix it from the caller's config.
+
+Adds Config.CallTimeout, defaulting to the existing 15s when unset so
+this is not a behavior change for anyone not hitting the issue.
+
+Fixes Agent-Field/agentfield#720.
+
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com> (5fa2057)
+
+## [0.1.98-rc.2] - 2026-07-06
+
+
+### Fixed
+
+- Fix(control-plane): flush SSE headers immediately in memory events handler (#358) (#716)
+
+The SSEHandler deferred header flush until the first event, causing
+clients to hang on connection when no events matched immediately.
+
+Changes:
+- Subscribe before flushing headers so HTTP 500 is still possible on error
+- Flush response headers + WriteHeader(200) after successful subscription
+- Send ': connected' comment frame as keepalive marker
+- Replace deprecated c.Writer.CloseNotify() with c.Request.Context().Done()
+- Handle channel close (ok=false) to exit cleanly
+- Update test comments to reflect new behavior
+
+Closes #358 (e0e8337)
+
 ## [0.1.98-rc.1] - 2026-07-04
 
 

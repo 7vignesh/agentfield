@@ -365,6 +365,13 @@ type Config struct {
 	// plane does not expect heartbeats.
 	LeaseRefreshInterval time.Duration
 
+	// CallTimeout bounds every outbound HTTP call this agent makes as a
+	// client - cross-agent Call()s, memory backend requests, etc.
+	// Optional. Default: 15s. A reasoning-model-backed reasoner chained
+	// behind Call() (search + a large max_tokens reasoning response) can
+	// easily exceed the old hardcoded 15s, so raise this for such workloads.
+	CallTimeout time.Duration
+
 	// DisableLeaseLoop disables automatic periodic lease refreshes.
 	// Optional. Default: false. When true, node registration reports
 	// HeartbeatInterval as "0s" to signal that the agent does not heartbeat.
@@ -509,6 +516,8 @@ type Agent struct {
 	// Go code does this through net/http, database/sql, etc.
 	cancelMu    sync.Mutex
 	cancelFuncs map[string]context.CancelFunc
+
+	startTime time.Time
 }
 
 // New constructs an Agent.
@@ -538,8 +547,11 @@ func New(cfg Config) (*Agent, error) {
 		cfg.Logger = log.New(os.Stdout, "[agent] ", log.LstdFlags)
 	}
 
+	if cfg.CallTimeout <= 0 {
+		cfg.CallTimeout = 15 * time.Second
+	}
 	httpClient := &http.Client{
-		Timeout: 15 * time.Second,
+		Timeout: cfg.CallTimeout,
 	}
 
 	// Initialize AI client if config provided
@@ -564,6 +576,7 @@ func New(cfg Config) (*Agent, error) {
 		logger:                      cfg.Logger,
 		realtimeValidationFunctions: make(map[string]struct{}),
 		cancelFuncs:                 make(map[string]context.CancelFunc),
+		startTime:                   time.Now(),
 	}
 
 	// Initialize local verifier if enabled
@@ -800,6 +813,7 @@ func (a *Agent) handler() http.Handler {
 	a.handlerOnce.Do(func() {
 		mux := http.NewServeMux()
 		mux.HandleFunc("/health", a.healthHandler)
+		mux.HandleFunc("/status", a.statusHandler)
 		mux.HandleFunc("/discover", a.handleDiscover)
 		mux.HandleFunc("/agentfield/v1/logs", a.handleAgentfieldLogs)
 		mux.HandleFunc("/execute", a.handleExecute)
@@ -834,7 +848,7 @@ func (a *Agent) handler() http.Handler {
 func (a *Agent) originAuthMiddleware(next http.Handler, token string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
-		if path == "/health" || path == "/discover" || path == "/agentfield/v1/logs" {
+		if path == "/health" || path == "/status" || path == "/discover" || path == "/agentfield/v1/logs" {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -858,7 +872,7 @@ func (a *Agent) localVerificationMiddleware(next http.Handler) http.Handler {
 		path := r.URL.Path
 
 		// Only verify execution endpoints
-		if path == "/health" || path == "/discover" || path == "/agentfield/v1/logs" {
+		if path == "/health" || path == "/status" || path == "/discover" || path == "/agentfield/v1/logs" {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -996,6 +1010,17 @@ func (a *Agent) healthHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
 }
 
+// statusHandler answers the control plane's HTTP health-monitor poll
+// (GET {base_url}/status), which requires a JSON body with status:"running".
+func (a *Agent) statusHandler(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":         "running",
+		"node_id":        a.cfg.NodeID,
+		"version":        a.cfg.Version,
+		"uptime_seconds": int(time.Since(a.startTime).Seconds()),
+	})
+}
+
 func (a *Agent) handleDiscover(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -1032,6 +1057,7 @@ func (a *Agent) discoveryPayload() map[string]any {
 		"node_id":         a.cfg.NodeID,
 		"version":         a.cfg.Version,
 		"deployment_type": deployment,
+		"auth_required":   a.cfg.RequireOriginAuth || a.cfg.LocalVerification,
 		"reasoners":       reasoners,
 		"skills":          skills,
 		"sessions":        a.SessionDefinitions(),
