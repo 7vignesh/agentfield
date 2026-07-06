@@ -41,6 +41,12 @@ func needsMaxCompletionTokens(model string) bool {
 // OpenAI-compatible endpoint (not Anthropic, Cohere, etc.).
 func isOpenAICompatible(baseURL string) bool {
 	lower := strings.ToLower(baseURL)
+
+	// Known non-OpenAI providers (not OpenAI-compatible chat/completions).
+	if strings.Contains(lower, "anthropic") || strings.Contains(lower, "cohere") {
+		return false
+	}
+
 	// OpenAI's own endpoint
 	if strings.Contains(lower, "openai.com") {
 		return true
