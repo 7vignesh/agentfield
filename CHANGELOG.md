@@ -6,6 +6,41 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.98-rc.3] - 2026-07-06
+
+
+### Fixed
+
+- Fix(sdk): GLM-5.2 context limits + reasoning-model empty-output retry (#722)
+
+- _MODEL_CONTEXT_LIMITS: add openrouter/z-ai/glm-5.2 and z-ai/glm-5.2 at
+  131072. Absent entries fell back to 10,192 tokens and the trimmer cut
+  68% of large prompts (verified live: whole context blocks dropped).
+- AgentAI.ai: when parsed structured output is empty/default-only AND the
+  response carries reasoning_content (reasoning model spent the whole
+  completion budget on hidden reasoning), retry once with max_tokens
+  doubled instead of silently returning the empty instance.
+
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com> (0f9cc60)
+
+- Fix(sdk-go): make agent outbound call timeout configurable (#721)
+
+agent.New() hardcoded a 15s timeout on the http.Client used for every
+outbound call the agent makes as a client (cross-agent Call(), the
+control-plane memory backend). Any reasoner chained behind Call() that
+legitimately takes longer - most visibly a reasoning-model-backed
+reasoner doing search + a large max_tokens "thinking" response -
+fails the caller with a client-side context-deadline-exceeded error
+while the callee keeps running and completes successfully on its own,
+with no way to fix it from the caller's config.
+
+Adds Config.CallTimeout, defaulting to the existing 15s when unset so
+this is not a behavior change for anyone not hitting the issue.
+
+Fixes Agent-Field/agentfield#720.
+
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com> (5fa2057)
+
 ## [0.1.98-rc.2] - 2026-07-06
 
 
