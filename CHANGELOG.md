@@ -6,6 +6,41 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.99-rc.1] - 2026-07-07
+
+
+### Added
+
+- Feat(cli): provision a requires-python-compatible interpreter for af install (#727)
+
+* feat(cli): resolve a requires-python-compatible interpreter for node installs
+
+`af install` built each node's venv with whatever `python3` was on PATH and
+let pip enforce the package's requires-python. A node pinning
+`requires-python = ">=3.12"` on a host whose python3 is 3.10 failed with a raw
+`pip ... requires a different Python` trace and no path forward.
+
+Add resolveVenvInterpreter: read requires-python from pyproject.toml and, when
+the ambient interpreter doesn't satisfy it, provision a compatible one via uv
+(auto-downloads a standalone build) or discover a matching pyenv-installed
+version — otherwise fail with an actionable error naming the required and found
+versions. No declared constraint keeps the legacy python3->python fallback, so
+existing behavior is unchanged.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+* feat(cli): build node venvs with the requires-python-resolved interpreter
+
+Wire resolveVenvInterpreter into InstallPythonDependencies so a node's venv is
+created with an interpreter that satisfies its requires-python, provisioning one
+when the ambient python is too old instead of failing later in pip.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Opus 4.8 (1M context) <noreply@anthropic.com> (086b0e0)
+
 ## [0.1.98] - 2026-07-07
 
 ## [0.1.98-rc.4] - 2026-07-06
