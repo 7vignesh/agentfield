@@ -6,6 +6,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.103-rc.1] - 2026-07-07
+
+
+### Added
+
+- Feat(cli): numbered menu for require_one_of provider selection (#734)
+
+When an interactive `af run`/`af install` hits an unsatisfied
+require_one_of group, the old flow prompted for each option in sequence
+and told the user to "fill in one, leave the rest blank" — so to use
+OpenRouter you had to know to press Enter past the Anthropic prompt.
+Nobody could tell how to select. It also listed options as
+`ANTHROPIC_API_KEY  |  OPENROUTER_API_KEY`, which reads poorly.
+
+Now a group with two or more options renders a numbered menu (each
+option on its own line with its description), reads a single selection,
+and prompts only for the chosen provider. A single-option group still
+prompts directly. All user-facing option enumerations join with "or"
+instead of "|" (menu prompt "Enter 1 or 2 …", and the missing-env
+error).
+
+Adds a PromptLine method to the Prompter interface (echoed line read for
+the selection) with a stdin-swap test, and menu contract tests covering
+select/retry/skip/exhaust/blank/single-option paths.
+
+Co-authored-by: Claude Opus 4.8 (1M context) <noreply@anthropic.com> (c07b197)
+
 ## [0.1.102] - 2026-07-07
 
 ## [0.1.102-rc.3] - 2026-07-07
