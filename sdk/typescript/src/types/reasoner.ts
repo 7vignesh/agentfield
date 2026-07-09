@@ -1,4 +1,5 @@
 import type { ReasonerContext } from '../context/ReasonerContext.js';
+import type { TriggerBinding } from '../triggers/types.js';
 
 export interface ReasonerDefinition<TInput = any, TOutput = any> {
   name: string;
@@ -19,4 +20,12 @@ export interface ReasonerOptions {
   memoryConfig?: any;
   /** Force control-plane verification instead of local verification for this reasoner. */
   requireRealtimeValidation?: boolean;
+  /**
+   * Trigger bindings for this reasoner. When present, the control plane
+   * registers inbound webhook / cron triggers so events are routed to
+   * this reasoner automatically.
+   *
+   * Use `eventTrigger()` or `scheduleTrigger()` factories to create bindings.
+   */
+  triggers?: TriggerBinding[];
 }

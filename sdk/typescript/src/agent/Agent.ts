@@ -24,6 +24,7 @@ import {
 import { ApprovalClient } from '../approval/ApprovalClient.js';
 import { AgentRouter } from '../router/AgentRouter.js';
 import type { ReasonerHandler, ReasonerOptions } from '../types/reasoner.js';
+import { triggerToPayload } from '../triggers/factories.js';
 import type { SkillHandler, SkillOptions } from '../types/skill.js';
 import { ExecutionContext, type ExecutionMetadata } from '../context/ExecutionContext.js';
 import { ReasonerContext } from '../context/ReasonerContext.js';
@@ -1371,6 +1372,10 @@ export class Agent {
   private reasonerDefinitions() {
     return this.reasoners.all().map((r) => {
       const tags = r.options?.tags ?? [];
+      const triggers = r.options?.triggers ?? [];
+      const triggerPayloads = triggers.map(triggerToPayload);
+      // Auto-set accepts_webhook when at least one trigger is declared
+      const acceptsWebhook = triggers.length > 0;
       return {
         id: r.name,
         input_schema: toJsonSchema(r.options?.inputSchema),
@@ -1381,7 +1386,9 @@ export class Agent {
           cache_results: false
         },
         tags,
-        proposed_tags: tags
+        proposed_tags: tags,
+        triggers: triggerPayloads,
+        accepts_webhook: acceptsWebhook,
       };
     });
   }
