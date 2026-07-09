@@ -6,6 +6,169 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.106] - 2026-07-09
+
+## [0.1.106-rc.2] - 2026-07-08
+
+
+### Added
+
+- Feat(af-tray): live status dashboard — fleet, metrics, traffic-light thresholds, API-key flow (#739)
+
+* feat(af-tray): live fleet status menu with API-key handling
+
+Enhance the macOS menu-bar tray beyond a bare running/stopped indicator:
+
+- Fleet summary line under the status header: "N of M agents online · X
+  skills" (skills counted over online agents only, since offline agents'
+  capabilities aren't callable).
+- A bounded, live list of agents (online-first, then alphabetical), each
+  row a filled/hollow dot + node id + capability count. Overflow beyond
+  the slot pool collapses into "…and N more". Rows open the dashboard.
+- API-key aware: /health stays public so status never breaks, but
+  /api/v1/nodes returns 401 when the control plane has a key configured.
+  The tray detects that, shows "🔒 API key required" + an "Enter API
+  key…" item, prompts with a native hidden-answer dialog, validates the
+  key against the API before persisting it 0600 to ~/.agentfield/
+  tray-apikey, and re-prompts whenever the stored key is missing, wrong,
+  or expired. AGENTFIELD_API_KEY (env) still wins, mirroring the af CLI.
+
+All parsing/summary/formatting/key-storage logic lives in the
+build-tag-free shared.go so it unit-tests on Linux CI; the systray event
+loop and osascript dialogs stay in the _darwin file. fleet_test.go covers
+node parsing, online/skill counting, the 200/401/403/500/unreachable
+status mapping, header/proxy X-API-Key behavior, env-vs-file key
+precedence (0600), and the row/headline/sort formatting.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+
+* feat(af-tray): polished, colored status menu with live metrics
+
+Redesign the tray menu around the feedback that it was crowded, colorless,
+and hard to tell online from offline:
+
+- Color via emoji (NSMenu renders item text in the system color, but emoji
+  keep their color): 🟢 online / ⚪ offline agents, and icon-led metric
+  rows. Replaces the near-identical ●/○ dots that read as "all the same".
+- Declutter: the per-agent list moves into an "Agents" submenu whose title
+  carries the "N of M agents online" headline, so the top level stays short.
+- Live metrics rows:
+    ✅ success rate · run count · ✗ failures (· ▶ running)
+    ⏱ average latency · 🧠 server memory
+  Success/latency come from /api/ui/v1/executions/stats; memory is the
+  control-plane process RSS read via `ps` (the Prometheus /metrics endpoint
+  only exports Go heap, which understates the real footprint). Each row
+  hides itself when it has nothing to show.
+- The stats endpoint sits behind the API key like /nodes, so the existing
+  auth flow covers it; the key prompt now doubles as the "auth required"
+  message ("🔒 API key required — enter…" / "… expired — re-enter…").
+
+New pure helpers (agentsHeadline, agentLine, successLine, perfLine,
+enterKeyTitle, parse/fetchExecStats) live in the tag-free shared.go and are
+unit-tested on Linux CI; serverMemoryMB (ps-based RSS) is darwin-only.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+
+* fix(af-tray): reload launchd agents via bootout+bootstrap on install
+
+The install converge step used `kickstart -k`, which cannot re-exec a
+launchd agent across a binary whose code signature changed. Every
+rebuild/upgrade produces a new ad-hoc cdhash, so on a real upgrade launchd
+rejects the relaunch with EX_CONFIG (78) — "spawn failed" — and the tray
+(and potentially the server) dies until the next login.
+
+Replace the bootstrap-then-kickstart-k dance with reloadAgent: bootout
+(ignored if not loaded), bootstrap with a short retry loop to ride out
+bootout's async teardown, then a plain kickstart to ensure it's running
+now. This lands cleanly on the new bytes every time, and also fixes the
+long-standing caveat that plist-content changes weren't hot-reloaded.
+
+Verified across an A→B upgrade with distinct cdhashes plus repeated
+installs: tray and server both stay running, server healthy, no EX_CONFIG.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+
+* refine(af-tray): calmer, one-fact-per-row dashboard layout
+
+Address the feedback that rows were still cramming multiple facts:
+
+- Two-line header: "AgentField" over a colored status line
+  ("🟢 Running · localhost:8080" / "🔴 Stopped").
+- One fact per row, each led by a single category glyph and reading
+  "Label — value":
+      🤖 Agents — 4 of 7 online   (submenu holds the roster)
+      ✅ Success — 83% (20 of 24) (fraction carries volume + failures)
+      ⚡ Response — 42 ms avg
+      🧠 Memory — 34 MB
+  Replaces the two crammed "… · … · …" lines. Rows with no data hide
+  themselves via a small setRow helper.
+- Server controls (Start/Stop/Restart/Start at login) move into a
+  "Control plane" submenu, so the top level reads as a quiet dashboard
+  rather than a wall of actions.
+
+Helpers renamed/split accordingly (statusLine, metricSuccess,
+metricResponse, metricMemory) and remain pure + unit-tested on Linux CI.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+
+* refine(af-tray): replace emoji with Lucide icon set
+
+Swap the emoji prefixes for real monochrome menu icons, so the tray looks
+native rather than "vibecoded":
+
+- Pull only the nine icons we use from Lucide (ISC): bot, circle-check,
+  gauge, cpu, layout-dashboard, server, scroll-text, key, power. Each is
+  rendered to a 32×32 (16pt @2x) black-on-transparent PNG and applied with
+  SetTemplateIcon, so macOS recolors it to match the menu in light/dark.
+- Status is shown with small colored dot icons (green/red header state,
+  green/gray per-agent) applied as regular images so their color survives.
+- Menu text drops all emoji; the pure helpers now emit text only and the
+  icons are attached in the darwin tray code.
+
+Assets live in assets/icons/ with a LICENSE.md crediting Lucide. Total
+footprint is ~6 KB for all twelve PNGs. Embeds are darwin-only
+(menu_icons_darwin.go); Linux CI cross-build and all unit tests still pass.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+
+* refine(af-tray): make metric rows readable, clickable dashboard links
+
+The stats were disabled menu items, which macOS renders in a hard-to-read
+dim gray; enabling them plainly would make them look like clickable actions
+with no action. Resolve the tension by making them genuine links: each stat
+row is now enabled (full-contrast, legible) and opens the dashboard view it
+summarizes —
+
+  Success / Response  -> /ui/executions
+  Memory              -> /ui/dashboard
+  Agents "Open …"     -> /ui/agents
+
+So the full-contrast text is honest rather than misleading. Adds uiPageURL
+(pure, tested) and an openURL helper.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+
+* feat(af-tray): traffic-light thresholds on the metric icons
+
+Color each stat's icon green / yellow / red by a benchmark, so health reads
+at a glance (NSMenu won't let us color the row text, so the icon carries it):
+
+  Success   green ≥60%   · yellow 30–59%  · red <30%
+  Response  green ≤100ms · yellow ≤500ms  · red >500ms
+  Memory    green <1GB   · yellow <2GB    · red ≥2GB
+
+No data → the neutral monochrome (template) icon. Green/yellow/red variants
+of circle-check, gauge and cpu are rendered from the same Lucide sources
+(ISC) and applied as regular colored images; the thresholds and
+level-mapping (successLevel/responseLevel/memoryLevel) are pure and
+unit-tested at every boundary.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Opus 4.8 <noreply@anthropic.com> (95d54ac)
+
 ## [0.1.106-rc.1] - 2026-07-08
 
 
