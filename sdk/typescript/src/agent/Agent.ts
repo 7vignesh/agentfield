@@ -1374,8 +1374,9 @@ export class Agent {
       const tags = r.options?.tags ?? [];
       const triggers = r.options?.triggers ?? [];
       const triggerPayloads = triggers.map(triggerToPayload);
-      // Auto-set accepts_webhook when at least one trigger is declared
-      const acceptsWebhook = triggers.length > 0;
+      // Auto-set accepts_webhook="true" when at least one trigger is declared.
+      // The control plane expects a *string* ("true", "false", "warn"), not a boolean.
+      const acceptsWebhook = triggers.length > 0 ? 'true' : undefined;
       return {
         id: r.name,
         input_schema: toJsonSchema(r.options?.inputSchema),

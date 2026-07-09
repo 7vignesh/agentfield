@@ -212,11 +212,11 @@ describe('registration integration', () => {
       event_types: [],
       config: { expression: '0 * * * *', timezone: 'UTC' },
     });
-    expect(withTriggers.accepts_webhook).toBe(true);
+    expect(withTriggers.accepts_webhook).toBe('true');
 
     // Reasoner without triggers
     const noTriggers = defs.find((d: any) => d.id === 'no_triggers');
     expect(noTriggers.triggers).toHaveLength(0);
-    expect(noTriggers.accepts_webhook).toBe(false);
+    expect(noTriggers.accepts_webhook).toBeUndefined();
   });
 });
