@@ -6,6 +6,64 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.107] - 2026-07-09
+
+## [0.1.107-rc.3] - 2026-07-09
+
+
+### Added
+
+- Feat(control-plane): af install support for Go agent nodes (#745)
+
+PackageMetadata gains an explicit language field with go.mod detection
+fallback (additive to config v1; Python manifests unchanged).
+entrypoint.build compiles the node at install time via a resolved Go
+toolchain (pyinterp-style discovery with actionable missing/too-old
+errors); af run launches the built binary with identical port,
+healthcheck, secret, and env semantics. Out-of-tree replace directives
+are refused with vendoring guidance, with an AGENTFIELD_GO_REPLACE
+override for dev installs. Service-layer install/start paths route
+through the shared dispatcher so both code paths stay in lockstep.
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (10cfe8a)
+
+## [0.1.107-rc.2] - 2026-07-09
+
+
+### Added
+
+- Feat(sdk/go): Agent.Pause webhook approvals, harness cost reporting, incremental schema mode (#744)
+
+* feat(sdk/go): Agent.Pause with webhook-resumed approvals
+
+Parity with the Python SDK's Agent.pause(): PauseManager registers a
+pending approval before client.RequestApproval transitions the
+execution to waiting, then blocks until the control plane's
+/webhooks/approval callback resolves it (or expiry/cancellation).
+Route matches the Python agent_server path and the CP's
+notifyApprovalCallback payload; exempted from origin/DID middleware
+like other CP-to-worker notifications. PauseClock intentionally not
+ported: the Go SDK has no execution watchdog to discount.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(sdk/go): harness cost reporting and incremental schema mode
+
+Metrics/Result gain CostUSD (*float64, nil = unknown) extracted from
+Claude's JSON output with Python's cost_usd-or-total_cost_usd
+semantics and accumulated across retries including failed attempts.
+Options gains SchemaMode (single/incremental/auto): auto engages on
+the compact-encoded schema crossing the large-schema token threshold,
+with the incremental prompt suffix, per-field failure diagnosis, and
+followup prompts ported byte-verbatim from the Python SDK. Non-Claude
+providers report nil cost (Python parity when litellm is unavailable).
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (cbe40d4)
+
 ## [0.1.107-rc.1] - 2026-07-09
 
 
