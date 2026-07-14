@@ -228,3 +228,115 @@ func TestMarshalRequest_UsesRequestModelOverClientModel(t *testing.T) {
 		t.Error("expected max_completion_tokens to be present for o1-preview")
 	}
 }
+
+func TestIsOpenAICompatible(t *testing.T) {
+	tests := []struct {
+		baseURL  string
+		expected bool
+	}{
+		// OpenAI
+		{"https://api.openai.com/v1", true},
+		{"https://api.openai.com/v1/", true},
+		// Azure OpenAI
+		{"https://my-resource.openai.azure.com/openai/deployments/gpt-4o", true},
+		// OpenRouter
+		{"https://openrouter.ai/api/v1", true},
+		// Known non-OpenAI providers — should NOT rewrite
+		{"https://api.anthropic.com/v1", false},
+		{"https://api.cohere.ai/v1", false},
+		{"https://api.cohere.com/v1/chat", false},
+		// Custom/self-hosted — assume OpenAI-compatible
+		{"http://localhost:8080/v1", true},
+		{"https://my-proxy.example.com/v1", true},
+		{"https://vllm.internal.corp/v1", true},
+		// Edge cases
+		{"", true},
+	}
+
+	for _, tt := range tests {
+		got := isOpenAICompatible(tt.baseURL)
+		if got != tt.expected {
+			t.Errorf("isOpenAICompatible(%q) = %v, want %v", tt.baseURL, got, tt.expected)
+		}
+	}
+}
+
+func TestMarshalRequest_NonOpenAIEndpointKeepsMaxTokens(t *testing.T) {
+	// Even for a new model, non-OpenAI endpoints should keep max_tokens
+	maxTokens := 1000
+	cfg := DefaultConfig()
+	cfg.APIKey = "test-key"
+	cfg.BaseURL = "https://api.anthropic.com/v1"
+	cfg.Model = "gpt-4o" // model name matches but endpoint is Anthropic
+
+	client, _ := NewClient(cfg)
+
+	req := &Request{
+		Model:     "gpt-4o",
+		MaxTokens: &maxTokens,
+		Messages: []Message{
+			{Role: "user", Content: []ContentPart{{Type: "text", Text: "hello"}}},
+		},
+	}
+
+	body, err := client.marshalRequest(req)
+	if err != nil {
+		t.Fatalf("marshalRequest error: %v", err)
+	}
+
+	var raw map[string]interface{}
+	if err := json.Unmarshal(body, &raw); err != nil {
+		t.Fatalf("unmarshal error: %v", err)
+	}
+
+	if _, ok := raw["max_completion_tokens"]; ok {
+		t.Error("expected max_completion_tokens to be absent for non-OpenAI endpoint")
+	}
+	if _, ok := raw["max_tokens"]; !ok {
+		t.Error("expected max_tokens to be present for non-OpenAI endpoint")
+	}
+}
+
+func TestMarshalRequest_StreamingPathRewritesMaxTokens(t *testing.T) {
+	// Verify that marshalRequest (used by both streaming and non-streaming paths)
+	// correctly rewrites for streaming requests too.
+	maxTokens := 2048
+	cfg := DefaultConfig()
+	cfg.APIKey = "test-key"
+	cfg.Model = "o3-mini"
+
+	client, _ := NewClient(cfg)
+
+	req := &Request{
+		Model:     "o3-mini",
+		MaxTokens: &maxTokens,
+		Stream:    true, // streaming request
+		Messages: []Message{
+			{Role: "user", Content: []ContentPart{{Type: "text", Text: "hello"}}},
+		},
+	}
+
+	body, err := client.marshalRequest(req)
+	if err != nil {
+		t.Fatalf("marshalRequest error: %v", err)
+	}
+
+	var raw map[string]interface{}
+	if err := json.Unmarshal(body, &raw); err != nil {
+		t.Fatalf("unmarshal error: %v", err)
+	}
+
+	// Verify rewrite happened
+	if _, ok := raw["max_tokens"]; ok {
+		t.Error("expected max_tokens to be absent for o3-mini streaming request")
+	}
+	if val, ok := raw["max_completion_tokens"]; !ok {
+		t.Error("expected max_completion_tokens to be present for o3-mini streaming request")
+	} else if int(val.(float64)) != 2048 {
+		t.Errorf("expected max_completion_tokens=2048, got %v", val)
+	}
+	// Verify stream flag is preserved
+	if val, ok := raw["stream"]; !ok || val != true {
+		t.Error("expected stream=true to be preserved in rewritten request")
+	}
+}
