@@ -1376,8 +1376,9 @@ export class Agent {
       const triggerPayloads = triggers.map(triggerToPayload);
       // Auto-set accepts_webhook="true" when at least one trigger is declared.
       // The control plane expects a *string* ("true", "false", "warn"), not a boolean.
+      // Omit both fields when no triggers to keep wire format stable for older CPs.
       const acceptsWebhook = triggers.length > 0 ? 'true' : undefined;
-      return {
+      const def: { id: string; [key: string]: any } = {
         id: r.name,
         input_schema: toJsonSchema(r.options?.inputSchema),
         output_schema: toJsonSchema(r.options?.outputSchema),
@@ -1388,9 +1389,12 @@ export class Agent {
         },
         tags,
         proposed_tags: tags,
-        triggers: triggerPayloads,
-        accepts_webhook: acceptsWebhook,
       };
+      if (triggerPayloads.length > 0) {
+        def.triggers = triggerPayloads;
+        def.accepts_webhook = acceptsWebhook;
+      }
+      return def;
     });
   }
 

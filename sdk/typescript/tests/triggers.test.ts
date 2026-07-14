@@ -214,9 +214,9 @@ describe('registration integration', () => {
     });
     expect(withTriggers.accepts_webhook).toBe('true');
 
-    // Reasoner without triggers
+    // Reasoner without triggers — fields omitted entirely for wire stability
     const noTriggers = defs.find((d: any) => d.id === 'no_triggers');
-    expect(noTriggers.triggers).toHaveLength(0);
+    expect(noTriggers.triggers).toBeUndefined();
     expect(noTriggers.accepts_webhook).toBeUndefined();
   });
 });

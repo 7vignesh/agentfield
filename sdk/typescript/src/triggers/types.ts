@@ -16,6 +16,11 @@
  *
  * Available as `ctx.trigger` (undefined when the reasoner was invoked directly
  * via app.call(...) instead of by an inbound event).
+ *
+ * @experimental This type is exported for forward compatibility. Runtime
+ * construction and injection into handler context is planned for #510
+ * (dispatch envelope unwrap + TriggerContext injection). Do not depend on
+ * this being populated until that issue ships.
  */
 export interface TriggerContext {
   /** AgentField trigger row ID; stable, equals the public URL slug. */
