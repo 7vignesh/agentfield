@@ -214,9 +214,86 @@ describe('registration integration', () => {
     });
     expect(withTriggers.accepts_webhook).toBe('true');
 
-    // Reasoner without triggers — fields omitted entirely for wire stability
+    // Reasoner without triggers — triggers omitted, accepts_webhook defaults
+    // to "warn" like the Python SDK.
     const noTriggers = defs.find((d: any) => d.id === 'no_triggers');
     expect(noTriggers.triggers).toBeUndefined();
-    expect(noTriggers.accepts_webhook).toBeUndefined();
+    expect(noTriggers.accepts_webhook).toBe('warn');
+  });
+});
+
+describe('acceptsWebhook 3-state resolution (Python parity)', () => {
+  async function definitionsFor(
+    register: (app: import('../src/agent/Agent.js').Agent) => void
+  ) {
+    const { Agent } = await import('../src/agent/Agent.js');
+    const app = new Agent({ nodeId: 'test-accepts-webhook', devMode: true });
+    register(app);
+    return (app as any).reasonerDefinitions() as any[];
+  }
+
+  it('explicit acceptsWebhook: false opts out even with triggers declared', async () => {
+    const defs = await definitionsFor((app) => {
+      app.reasoner('no_webhooks', async () => 'ok', {
+        acceptsWebhook: false,
+        triggers: [eventTrigger({ source: 'github', types: ['push'] })],
+      });
+    });
+    const def = defs.find((d) => d.id === 'no_webhooks');
+    expect(def.accepts_webhook).toBe('false');
+    // Triggers are still registered — the flag only gates webhook invocation.
+    expect(def.triggers).toHaveLength(1);
+  });
+
+  it('explicit acceptsWebhook: true is honored without triggers', async () => {
+    const defs = await definitionsFor((app) => {
+      app.reasoner('webhook_ready', async () => 'ok', { acceptsWebhook: true });
+    });
+    const def = defs.find((d) => d.id === 'webhook_ready');
+    expect(def.accepts_webhook).toBe('true');
+    expect(def.triggers).toBeUndefined();
+  });
+
+  it("explicit acceptsWebhook: 'warn' wins over the trigger auto-set", async () => {
+    const defs = await definitionsFor((app) => {
+      app.reasoner('warned', async () => 'ok', {
+        acceptsWebhook: 'warn',
+        triggers: [scheduleTrigger({ cron: '0 * * * *' })],
+      });
+    });
+    const def = defs.find((d) => d.id === 'warned');
+    expect(def.accepts_webhook).toBe('warn');
+    expect(def.triggers).toHaveLength(1);
+  });
+
+  it('defaults to "true" when triggers are declared (auto opt-in)', async () => {
+    const defs = await definitionsFor((app) => {
+      app.reasoner('auto_opt_in', async () => 'ok', {
+        triggers: [eventTrigger({ source: 'stripe' })],
+      });
+    });
+    const def = defs.find((d) => d.id === 'auto_opt_in');
+    expect(def.accepts_webhook).toBe('true');
+  });
+
+  it('defaults to "warn" without triggers, matching Python', async () => {
+    const defs = await definitionsFor((app) => {
+      app.reasoner('plain', async () => 'ok');
+    });
+    const def = defs.find((d) => d.id === 'plain');
+    expect(def.accepts_webhook).toBe('warn');
+  });
+
+  it('serializes booleans to wire strings in the registration payload', async () => {
+    const defs = await definitionsFor((app) => {
+      app.reasoner('opt_in', async () => 'ok', { acceptsWebhook: true });
+      app.reasoner('opt_out', async () => 'ok', { acceptsWebhook: false });
+    });
+    for (const def of defs) {
+      // The control plane types accepts_webhook as *string — never a boolean.
+      expect(typeof def.accepts_webhook).toBe('string');
+    }
+    expect(defs.find((d) => d.id === 'opt_in').accepts_webhook).toBe('true');
+    expect(defs.find((d) => d.id === 'opt_out').accepts_webhook).toBe('false');
   });
 });
