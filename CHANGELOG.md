@@ -6,6 +6,73 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.109-rc.3] - 2026-07-15
+
+
+### Fixed
+
+- Fix(sdk/go): rewrite max_tokens to max_completion_tokens for newer OpenAI models (#724)
+
+* fix(sdk/go): rewrite max_tokens to max_completion_tokens for newer OpenAI models (#441)
+
+Newer OpenAI models (o1, o3, gpt-4o, gpt-4.x) dropped support for the
+legacy max_tokens parameter in favor of max_completion_tokens. The Go
+SDK was always emitting max_tokens, causing the output-length cap to be
+silently ignored.
+
+Changes:
+- Add model-aware marshalRequest() that detects newer OpenAI models and
+  rewrites max_tokens → max_completion_tokens at serialization time
+- Detection uses model prefix matching (o1, o3, o4, gpt-4o, gpt-4.)
+- Preserves backward compatibility: legacy models still use max_tokens
+- Request-level model override takes precedence over client default
+- Add 6 focused tests covering new models, legacy models, nil handling,
+  and request-level model override
+
+Closes #441
+
+* Potential fix for pull request finding
+
+Co-authored-by: Copilot Autofix powered by AI <175728472+Copilot@users.noreply.github.com>
+
+* review: add tests for isOpenAICompatible and streaming path wire format
+
+Address reviewer feedback:
+- TestIsOpenAICompatible: pin down behavior for OpenAI, Azure, OpenRouter,
+  Anthropic, Cohere, and custom/self-hosted endpoints
+- TestMarshalRequest_NonOpenAIEndpointKeepsMaxTokens: verify non-OpenAI
+  endpoints keep max_tokens even for new model names
+- TestMarshalRequest_StreamingPathRewritesMaxTokens: verify the rewrite
+  works correctly when stream=true (same marshalRequest path)
+
+* fix(sdk/go): scope max_tokens rewrite to vouched endpoints, future-proof model matching
+
+Address review feedback on #724:
+
+- Invert the model check: instead of allowlisting o1/o3/o4/gpt-4o/gpt-4.x
+  (which missed gpt-5 and any future family), deny the closed legacy set
+  (gpt-4, gpt-4-*, gpt-3*) and rewrite for every other gpt-* model plus
+  any o<digit> reasoning model.
+- Invert the endpoint default: rewrite max_tokens -> max_completion_tokens
+  only for endpoints known to accept it (api.openai.com, *.openai.azure.com,
+  openrouter.ai), matched by parsed hostname rather than substring. Unknown
+  or self-hosted BaseURLs (Ollama, LM Studio, llama.cpp, vLLM) keep
+  max_tokens so servers that silently drop unknown fields never lose the
+  output cap (#441).
+- Tests: check the NewClient error instead of discarding it, pin BaseURL
+  explicitly so env vars cannot flip the endpoint gate, and add coverage
+  for gpt-5/o5 rewrites, unknown-host passthrough, host lookalikes, and
+  two end-to-end wire-body assertions (recording RoundTripper against
+  api.openai.com and a real httptest server for the self-hosted case).
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Copilot Autofix powered by AI <175728472+Copilot@users.noreply.github.com>
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com>
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (99f3e9f)
+
 ## [0.1.109-rc.2] - 2026-07-15
 
 
