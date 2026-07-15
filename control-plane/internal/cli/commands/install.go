@@ -45,7 +45,9 @@ func (cmd *InstallCommand) BuildCobraCommand() *cobra.Command {
 
 The package can be:
 - A local directory path
-- A GitHub repository URL
+- A GitHub repository URL — append //<subdir> to install a package whose
+  agentfield-package.yaml lives in a subdirectory (repos can ship several
+  nodes, e.g. a Python root and a Go port), and @<ref> for a branch or tag
 - A package name from the AgentField registry
 
 Use --path to install a package that lives in a subdirectory of the source, so a
@@ -59,6 +61,7 @@ Examples:
   agentfield install https://github.com/user/agent-repo
   agentfield install https://github.com/user/agent-repo --path go
   agentfield install https://github.com/user/agent-repo@v1.2.3 --path go
+  agentfield install https://github.com/user/agent-repo//go@main
   agentfield install agent-name`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cobraCmd *cobra.Command, args []string) error {

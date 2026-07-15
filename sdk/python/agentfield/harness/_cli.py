@@ -6,6 +6,7 @@ import asyncio
 import json
 import os
 import re
+import shutil
 import signal
 import subprocess
 from typing import Any, Dict, List, Optional, Tuple
@@ -25,6 +26,24 @@ _DEFAULT_IDLE_SECONDS = 300.0
 
 def strip_ansi(text: str) -> str:
     return _ANSI_RE.sub("", text)
+
+
+def resolve_cli_command(name: str) -> str:
+    """Resolve a bare CLI name to a spawnable path on Windows.
+
+    ``create_subprocess_exec`` uses CreateProcess, which does no PATHEXT
+    resolution — npm-installed CLIs (opencode, codex, gemini) exist on
+    Windows PATH only as ``.cmd``/``.ps1`` shims, so spawning the bare name
+    raises FileNotFoundError even though the shell finds it. ``shutil.which``
+    honors PATHEXT; the resolved full path (CreateProcess runs ``.cmd`` files
+    via cmd.exe when given the real path) spawns fine. Names that already
+    carry a path separator, and anything on POSIX, pass through untouched.
+    """
+    if os.name != "nt":
+        return name
+    if os.sep in name or "/" in name:
+        return name
+    return shutil.which(name) or name
 
 
 def _resolve_idle_seconds(idle_seconds: Optional[float]) -> Optional[float]:
@@ -60,6 +79,22 @@ async def _drain(
             break
         chunks.append(chunk)
         last_activity[0] = asyncio.get_event_loop().time()
+
+
+async def _feed_stdin(proc: asyncio.subprocess.Process, data: bytes) -> None:
+    """Write data to the child's stdin and close it, tolerating early exits."""
+    if proc.stdin is None:
+        return
+    try:
+        proc.stdin.write(data)
+        await proc.stdin.drain()
+    except (BrokenPipeError, ConnectionResetError, OSError):
+        pass
+    finally:
+        try:
+            proc.stdin.close()
+        except OSError:
+            pass
 
 
 # Grace period for the child's exit notification after its pipes hit EOF (or
@@ -116,6 +151,7 @@ async def run_cli(
     cwd: Optional[str] = None,
     timeout: Optional[float] = None,
     idle_seconds: Optional[float] = None,
+    input_text: Optional[str] = None,
 ) -> Tuple[str, str, int]:
     """Run a CLI command async. Returns (stdout, stderr, returncode).
 
@@ -124,6 +160,11 @@ async def run_cli(
     ``AGENTFIELD_HARNESS_IDLE_SECONDS``, default 120s; <= 0 disables), the process
     group is killed and ``TimeoutError`` is raised. ``timeout`` remains the outer
     wall-clock bound.
+
+    ``input_text`` is written to the child's stdin (UTF-8) and stdin is closed;
+    without it stdin is /dev/null. Providers use this to hand over prompts too
+    large for a command line — on Windows an npm ``.cmd`` shim runs via
+    cmd.exe, which caps the command line at ~8k characters.
     """
     merged_env = {**os.environ}
     if env:
@@ -133,8 +174,11 @@ async def run_cli(
     idle = _resolve_idle_seconds(idle_seconds)
 
     proc = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdin=asyncio.subprocess.DEVNULL,
+        resolve_cli_command(cmd[0]),
+        *cmd[1:],
+        stdin=asyncio.subprocess.PIPE
+        if input_text is not None
+        else asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         env=merged_env,
@@ -146,11 +190,15 @@ async def run_cli(
     stderr_chunks: List[bytes] = []
     last_activity = [asyncio.get_event_loop().time()]
 
-    # Drain both pipes concurrently to avoid a pipe-buffer deadlock.
-    drain = asyncio.gather(
+    # Pump all pipes concurrently to avoid a pipe-buffer deadlock (a large
+    # stdin feed must not block stdout/stderr reads, and vice versa).
+    pumps = [
         _drain(proc.stdout, stdout_chunks, last_activity),
         _drain(proc.stderr, stderr_chunks, last_activity),
-    )
+    ]
+    if input_text is not None:
+        pumps.append(_feed_stdin(proc, input_text.encode("utf-8")))
+    drain = asyncio.gather(*pumps)
 
     def _kill_group() -> None:
         pid = proc.pid
@@ -227,9 +275,7 @@ async def run_cli(
         fallback_returncode = await _wait_process_exit(proc, _kill_group)
 
     if idle_timed_out:
-        raise TimeoutError(
-            f"CLI command made no progress for {idle}s: {' '.join(cmd)}"
-        )
+        raise TimeoutError(f"CLI command made no progress for {idle}s: {' '.join(cmd)}")
     if timed_out:
         raise TimeoutError(f"CLI command timed out after {timeout}s: {' '.join(cmd)}")
 
