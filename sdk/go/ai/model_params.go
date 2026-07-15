@@ -2,13 +2,19 @@ package ai
 
 import (
 	"encoding/json"
+	"net/url"
 	"strings"
 )
 
 // needsMaxCompletionTokens returns true if the model requires
-// max_completion_tokens instead of max_tokens. This applies to OpenAI's
-// newer model families (o1, o3, gpt-4o, etc.) which dropped support for
-// the legacy max_tokens parameter.
+// max_completion_tokens instead of max_tokens.
+//
+// Every OpenAI chat model from gpt-4o onwards (gpt-4o, gpt-4.1, gpt-4.5,
+// gpt-5, ...) and the whole o-series of reasoning models (o1, o3, o4, and
+// any future oN) uses max_completion_tokens. Rather than allowlisting model
+// names — which goes stale every time OpenAI ships a new family — we
+// denylist the known-legacy families that still take max_tokens (gpt-3.x
+// and the original gpt-4 line). Those lines are closed and can never grow.
 //
 // Reference: https://platform.openai.com/docs/api-reference/chat/create
 func needsMaxCompletionTokens(model string) bool {
@@ -19,53 +25,65 @@ func needsMaxCompletionTokens(model string) bool {
 		m = m[idx+1:]
 	}
 
-	// o1, o3, o4 series always use max_completion_tokens
-	if strings.HasPrefix(m, "o1") || strings.HasPrefix(m, "o3") || strings.HasPrefix(m, "o4") {
+	// Known-legacy families that still use max_tokens: gpt-3.5-*, gpt-4,
+	// gpt-4-turbo, gpt-4-32k, gpt-4-0613, etc.
+	if m == "gpt-4" || strings.HasPrefix(m, "gpt-4-") || strings.HasPrefix(m, "gpt-3") {
+		return false
+	}
+
+	// Any other gpt-* model (gpt-4o*, gpt-4.1, gpt-5, ...) is newer than the
+	// legacy set and uses max_completion_tokens.
+	if strings.HasPrefix(m, "gpt-") {
 		return true
 	}
 
-	// gpt-4o and gpt-4o-mini series use max_completion_tokens
-	if strings.HasPrefix(m, "gpt-4o") {
-		return true
-	}
-
-	// gpt-4.1, gpt-4.5 etc. (newer dot-release models)
-	if strings.HasPrefix(m, "gpt-4.") {
+	// o-series reasoning models: "o" followed by a digit (o1, o3, o4, o5, ...).
+	// Requiring the digit keeps names like "omni-*" or "openchat" out.
+	if len(m) >= 2 && m[0] == 'o' && m[1] >= '0' && m[1] <= '9' {
 		return true
 	}
 
 	return false
 }
 
-// isOpenAICompatible returns true if the base URL points to OpenAI or an
-// OpenAI-compatible endpoint (not Anthropic, Cohere, etc.).
-func isOpenAICompatible(baseURL string) bool {
-	lower := strings.ToLower(baseURL)
+// vouchedRewriteDomains lists the hosts known to accept (and, for newer
+// models, require) max_completion_tokens. Matching is by exact host or any
+// subdomain (e.g. api.openai.com, <resource>.openai.azure.com).
+var vouchedRewriteDomains = []string{
+	"openai.com",       // api.openai.com
+	"openai.azure.com", // <resource>.openai.azure.com
+	"openrouter.ai",
+}
 
-	// Known non-OpenAI providers (not OpenAI-compatible chat/completions).
-	if strings.Contains(lower, "anthropic") || strings.Contains(lower, "cohere") {
+// isVouchedRewriteEndpoint reports whether baseURL points at an endpoint we
+// can vouch for accepting max_completion_tokens: OpenAI, Azure OpenAI, or
+// OpenRouter. For any other host — including self-hosted OpenAI-compatible
+// servers (Ollama, LM Studio, llama.cpp, older vLLM) — we keep the legacy
+// max_tokens field: several of those servers silently drop unknown fields,
+// so rewriting would strip the output cap with no error (the silent failure
+// #441 is about). If such a host actually proxies a newer OpenAI model, it
+// rejects max_tokens loudly, which is the safer failure mode.
+func isVouchedRewriteEndpoint(baseURL string) bool {
+	u, err := url.Parse(strings.TrimSpace(baseURL))
+	if err != nil {
 		return false
 	}
 
-	// OpenAI's own endpoint
-	if strings.Contains(lower, "openai.com") {
-		return true
+	host := strings.ToLower(u.Hostname())
+	if host == "" {
+		return false
 	}
-	// OpenRouter proxies to OpenAI models
-	if strings.Contains(lower, "openrouter.ai") {
-		return true
+
+	for _, domain := range vouchedRewriteDomains {
+		if host == domain || strings.HasSuffix(host, "."+domain) {
+			return true
+		}
 	}
-	// Azure OpenAI
-	if strings.Contains(lower, "openai.azure.com") {
-		return true
-	}
-	// For unknown/custom endpoints, assume OpenAI-compatible since that's
-	// the most common case for the chat/completions API shape.
-	return true
+	return false
 }
 
 // marshalRequest serializes the request, applying provider-specific parameter
-// rewrites. For OpenAI-compatible endpoints with newer models, max_tokens is
+// rewrites. For vouched OpenAI endpoints with newer models, max_tokens is
 // rewritten to max_completion_tokens.
 func (c *Client) marshalRequest(req *Request) ([]byte, error) {
 	model := req.Model
@@ -74,8 +92,9 @@ func (c *Client) marshalRequest(req *Request) ([]byte, error) {
 	}
 
 	// If the model needs max_completion_tokens and we have a max_tokens value,
-	// serialize with the rewritten field name.
-	if req.MaxTokens != nil && needsMaxCompletionTokens(model) && isOpenAICompatible(c.config.BaseURL) {
+	// serialize with the rewritten field name — but only for endpoints known
+	// to understand it.
+	if req.MaxTokens != nil && needsMaxCompletionTokens(model) && isVouchedRewriteEndpoint(c.config.BaseURL) {
 		return marshalWithMaxCompletionTokens(req)
 	}
 
