@@ -6,6 +6,105 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.109-rc.2] - 2026-07-15
+
+
+### Fixed
+
+- Fix(sdk/python): bound the harness subprocess exit wait — silent reasoner wedge (#778)
+
+A reasoner calling a CLI harness provider could wedge silently forever:
+stuck 'running' with no child process, no logs, and a healthy event loop.
+Root-caused from a production swe-planner run that sat 26 minutes in that
+state: run_cli's finally block ended with a bare `await proc.wait()`, which
+parks indefinitely in two real situations —
+
+1. Windows proactor loop loses the RegisterWaitWithQueue completion that
+   resolves proc.wait() even though the child already exited (CPython
+   gh-81562 / gh-111604). Both pipes are at EOF, no process remains, and
+   nothing ever wakes the coroutine.
+2. An orphaned grandchild outlives a killed parent while holding the
+   inherited output pipes: asyncio resolves proc.wait() only after every
+   pipe disconnects, and on Windows proc.kill() cannot reach grandchildren
+   (pre-fix, test_run_cli_idle_watchdog_aborts_stalled_child hangs >100s
+   on a real Windows machine because of exactly this).
+
+Fix:
+- _wait_process_exit(): bound the exit wait with a grace period; on
+  expiry, kill whatever remains and recover the real exit status from
+  proc.returncode or by polling the underlying Popen object, which needs
+  no event delivery.
+- _kill_group(): use `taskkill /F /T` on Windows as the killpg analog so
+  kills reach the whole tree (also guards os.killpg with hasattr — it
+  does not exist on Windows).
+- run_cli now also kills the child when the wait loop exits abnormally
+  (cancellation included); previously a cancelled run_cli left the CLI
+  subprocess running and awaited its natural exit.
+
+Tests: unit regressions for the lost-notification recovery and
+kill-on-cancellation, plus a real-subprocess regression where a grandchild
+holds the pipes — run_cli must conclude in bounded time on every platform.
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (45a4d4d)
+
+## [0.1.109-rc.1] - 2026-07-14
+
+
+### Fixed
+
+- Fix(sdk): Windows harness reliability — opencode prompts over stdin, idle watchdog 120s→300s (#774)
+
+* fix(sdk/go): opencode prompts over stdin on Windows — argv blew cmd.exe's 8k cap
+
+On Windows the opencode CLI on PATH is an npm .cmd shim that CreateProcess
+routes through cmd.exe, whose ~8k command-line cap real prompts blow straight
+through ("The command line is too long."). The Go harness passed the prompt as
+a positional arg, so every call whose prompt embedded diff context died at
+spawn — and schema retries, which append more text, could never recover. The
+observable failure was silent and severe: pr-af-go on Windows "completed"
+reviews with zero dimensions planned, empty LLM fields, and a confident
+"Safe to merge — 0 findings" verdict manufactured from mechanical parsing
+alone (every failed call was downgraded to "0 findings for this dimension").
+
+opencode reads the prompt from stdin when the positional arg is absent, so on
+Windows the prompt now goes over stdin — mirroring the Python SDK's
+_prompt_via_stdin fix (harness/providers/opencode.py). POSIX keeps the
+battle-tested positional-arg path. The provider's injectable runCLI seam moves
+from RunCLI to RunCLIWithStdin (which already existed for the claude
+provider).
+
+Verified live on Windows 11: pre-fix, a pr-af-go review of a 335-line PR
+produced a false-clean (plan.dimensions null); post-fix the same review runs
+its dimension reviewers with prompts delivered over stdin (argv ends at the
+model flag). TestOpenCodePromptDelivery pins both delivery paths; the
+harness suite shows no new failures against the pre-existing Windows baseline
+(22 fixture/path-separator failures unrelated to this change, green on Linux
+CI).
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(sdk): raise harness idle-watchdog default 120s -> 300s (both SDKs)
+
+Provider CLIs in JSON mode emit events only at completion boundaries —
+opencode's `run --format json` writes a text event when a part carries
+`time.end`, never token-by-token — so one long reasoning completion over a
+large context is minutes of legitimate stdout silence. At 120s the watchdog
+routinely killed healthy runs on slower models (observed live: pr-af-go
+reviews on deepseek-v4-pro died with "CLI command made no progress for 120s"
+at 8-19 minutes into otherwise-progressing pipelines, while chatty
+tool-calling models like kimi-k2.5 sailed through because every tool_use
+event reset the window).
+
+300s tolerates a long single completion while still catching genuine hangs.
+AGENTFIELD_HARNESS_IDLE_SECONDS still overrides in both SDKs; <= 0 still
+disables. Go and Python defaults move together to keep parity.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (8f0e350)
+
 ## [0.1.108] - 2026-07-13
 
 ## [0.1.108-rc.1] - 2026-07-13
