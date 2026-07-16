@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.110-rc.1] - 2026-07-16
+
+
+### Chores
+
+- Chore(web-client): override ws to 8.21.0 (#773) (9c7089f)
+
 ## [0.1.109] - 2026-07-16
 
 ## [0.1.109-rc.7] - 2026-07-16
