@@ -6,6 +6,78 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.111-rc.1] - 2026-07-19
+
+
+### Added
+
+- Feat(sdk/typescript): trigger system parity — dispatch, sugar, testing, demo (#510, #511, #512) (#796)
+
+Implements the three remaining sub-issues of the TypeScript SDK trigger
+parity epic (#507):
+
+#510 — Dispatch envelope unwrap + TriggerContext injection
+- New src/triggers/dispatch.ts: isTriggerEnvelope(), unwrapEnvelope(),
+  applyTriggerTransform() — detects {event, _meta} envelope shape from
+  the control plane dispatcher, constructs TriggerContext, applies the
+  matched binding's transform
+- ReasonerContext gains trigger?: TriggerContext field
+- Agent.ts runReasoner() and local call() path wired to unwrap envelopes
+- Direct calls (no envelope) pass through unchanged
+
+#511 — onEvent/onSchedule sugar + test helpers + fixtures
+- Agent.ts: app.onEvent(spec, handler) and app.onSchedule(cron, handler)
+  sugar methods that forward to app.reasoner() with triggers
+- New src/triggers/testing.ts: simulateTrigger(), simulateSchedule(),
+  loadFixture() for unit testing without a control plane
+- Copied 6 fixture JSONs from Python SDK (stripe, github, slack, cron,
+  generic_hmac, generic_bearer)
+
+#512 — examples/triggers-demo-ts + skill docs
+- New examples/triggers-demo-ts/: agent.ts (3 deterministic reasoners),
+  Dockerfile, docker-compose.yml, README.md, fire-events.sh
+- New skills/agentfield-multi-reasoner-builder/references/triggers.md
+  with Python + TypeScript scaffold reference
+
+Tests: 744 pass (75 files), including 74 new trigger-specific tests.
+Build: tsc clean, tsup ESM+DTS success. (95fe429)
+
+
+
+### Fixed
+
+- Fix(security): SSRF protection for approval callback_url (#435) (#790)
+
+* fix(security): SSRF protection for approval callback_url (#435)
+
+The approval callback_url field was accepted without SSRF validation and
+dispatched via a plain http.Client, allowing an attacker to use the
+control plane as a proxy to internal services (cloud metadata, RFC-1918,
+loopback).
+
+Changes:
+- Validate callback_url at registration time using services.ValidateWebhookURL()
+  to reject private/internal targets (localhost, 169.254.x, 10.x, 172.16.x,
+  192.168.x, ::1) before the URL is persisted.
+- Replace the plain http.Client in notifyApprovalCallback with
+  services.NewSSRFSafeClient() which enforces DNS-rebinding-safe private-IP
+  blocking at dial time.
+- Add comprehensive test coverage for both registration rejection and
+  runtime transport enforcement.
+
+Fixes #435
+
+* fix(test): allowlist loopback in webhook helper test for SSRF-safe client
+
+The existing TestExecuteReasonerAndWebhookHelpersCoverage test calls
+notifyApprovalCallback against a httptest server (127.0.0.1). After
+switching to NewSSRFSafeClient (#435), the SSRF transport rejects
+loopback as a private IP, causing the test to hang waiting for
+callbacks that never arrive.
+
+Fix: set services.SetWebhookAllowedHosts([]string{"127.0.0.1"})
+before the callback calls so the httptest server is reachable. (7fb1193)
+
 ## [0.1.110] - 2026-07-18
 
 
