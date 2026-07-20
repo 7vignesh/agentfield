@@ -14,6 +14,11 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from .async_config import AsyncConfig
+from .async_lifecycle import (
+    cancel_and_await_if_same_loop,
+    cancel_task_cross_loop,
+    current_running_loop,
+)
 from .execution_state import ExecutionState
 from .logger import get_logger
 
@@ -174,10 +179,7 @@ class ResultCache:
             logger.info("ResultCache started (caching disabled)")
             return
 
-        try:
-            current_loop = asyncio.get_running_loop()
-        except RuntimeError:
-            current_loop = None
+        current_loop = current_running_loop()
 
         # If we already have a cleanup task bound to the current loop and it's
         # still alive, there's nothing to do.
@@ -202,24 +204,14 @@ class ResultCache:
     def _discard_stale_cleanup_task(self) -> None:
         """Best-effort cancel of a cleanup task bound to a different loop.
 
-        Never awaits — a cross-loop await is exactly what deadlocks. If the
-        owning loop is still running we schedule the cancel on it; otherwise
-        we simply drop the reference.
+        Never awaits — a cross-loop await is exactly what deadlocks. Delegates
+        to the shared loop-aware helper; see async_lifecycle.py.
         """
         task = self._cleanup_task
         old_loop = self._loop
         self._cleanup_task = None
         self._shutdown_event = None
-        if task is None or task.done():
-            return
-        try:
-            if old_loop is not None and not old_loop.is_closed():
-                # Cancel on the loop that owns the task, thread-safely.
-                old_loop.call_soon_threadsafe(task.cancel)
-        except Exception:
-            # The old loop may be mid-teardown; the task is unreachable and
-            # will be collected. Nothing actionable here.
-            logger.debug("Could not cancel stale cleanup task", exc_info=True)
+        cancel_task_cross_loop(task, old_loop)
 
     async def stop(self) -> None:
         """Stop the cache and cleanup background tasks.
@@ -231,35 +223,18 @@ class ResultCache:
         its owning loop without awaiting. The cache contents are always
         cleared regardless, since that path only needs the thread lock.
         """
-        try:
-            current_loop = asyncio.get_running_loop()
-        except RuntimeError:
-            current_loop = None
+        current_loop = current_running_loop()
 
         task = self._cleanup_task
         shutdown_event = self._shutdown_event
         owning_loop = self._loop
-        same_loop = owning_loop is current_loop
 
-        if task is not None and same_loop:
-            # Safe path: signal shutdown and await the task on its own loop.
-            if shutdown_event is not None:
-                shutdown_event.set()
-            task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
-            except RuntimeError:
-                # Defensive: if the loop association is somehow inconsistent,
-                # don't let teardown wedge the caller.
-                logger.debug(
-                    "Cleanup task await raised RuntimeError during stop",
-                    exc_info=True,
-                )
-        elif task is not None:
-            # Cross-loop stop: cancel on the owning loop, never await here.
-            self._discard_stale_cleanup_task()
+        # Signal the loop to exit promptly when we're on its own loop; the
+        # shared helper then cancels + awaits it there. Cross-loop, the helper
+        # cancels on the owning loop without awaiting.
+        if shutdown_event is not None and owning_loop is current_loop:
+            shutdown_event.set()
+        await cancel_and_await_if_same_loop(task, owning_loop)
 
         self._cleanup_task = None
         self._shutdown_event = None
