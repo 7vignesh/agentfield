@@ -6,6 +6,74 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.111] - 2026-07-20
+
+## [0.1.111-rc.3] - 2026-07-20
+
+
+### Added
+
+- Feat(sdk/python): model#variant reasoning-effort support across harness providers (#801)
+
+* feat(sdk/python): split_model_variant + resolve_model_and_variant harness helpers
+
+Parse the 'provider/model#variant' model-string syntax so a reasoning-effort
+variant can travel through config surfaces that only hold a model string.
+An explicit options['variant'] wins over the suffix.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(sdk/python): opencode provider passes --variant reasoning effort
+
+'model#variant' (or an explicit variant option) now maps to opencode run's
+--variant flag; the -m flag and cost/metrics reporting use the base model id.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(sdk/python): codex provider passes -m and model_reasoning_effort
+
+codex exec previously received no model at all — options['model'] was only
+used for cost estimation, so every run used the CLI's own default. Pass
+-m <model>, and map a '#variant' suffix to -c model_reasoning_effort=<v>.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(sdk/python): claude/gemini providers strip #variant model suffix
+
+Neither runtime has a reasoning-effort control; strip the suffix so the
+underlying CLI/SDK still receives a valid model id instead of 'model#variant'.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* docs: model selection and #variant reasoning-effort syntax for harness providers
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(sdk/go): model#variant reasoning-effort parity in harness providers
+
+Mirrors the Python SDK: SplitModelVariant + Options.Variant (explicit field
+wins over the suffix), opencode passes --variant, codex adds
+-c model_reasoning_effort, claudecode/gemini strip the suffix. The
+OpenRouter-attribution overlay and usage recording key off the base model
+so a suffix neither defeats the prefix match nor pollutes attribution.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(sdk/typescript): model#variant reasoning-effort parity in harness providers
+
+Mirrors the Python SDK: splitModelVariant/resolveModelAndVariant helper,
+variant?: string through HarnessConfig/HarnessOptions, opencode passes
+--variant, codex now passes -m at all (it previously sent no model to the
+CLI — same bug the Python provider had) plus -c model_reasoning_effort,
+claude/gemini strip the suffix. Attribution overlay and usage metrics key
+off the base model.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (c500750)
+
 ## [0.1.111-rc.2] - 2026-07-20
 
 
