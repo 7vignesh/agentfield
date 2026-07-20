@@ -18,8 +18,6 @@ import asyncio
 import threading
 import time
 
-import pytest
-
 from agentfield.async_config import AsyncConfig
 from agentfield.result_cache import ResultCache
 
