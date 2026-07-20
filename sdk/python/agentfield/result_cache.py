@@ -128,6 +128,14 @@ class ResultCache:
         self._cleanup_task: Optional[asyncio.Task] = None
         self._cleanup_interval = self.config.cleanup_interval
         self._shutdown_event: Optional[asyncio.Event] = None
+        # The event loop the cleanup task/shutdown event are bound to. asyncio
+        # primitives (Task, Event) are not safe to await or set from a
+        # different loop, so we record the owning loop at start() and refuse
+        # cross-loop awaits at stop() to avoid the deadlock described in #623
+        # (mixing threading with asyncio). A stale reference is tolerated: the
+        # task is cancelled without a cross-loop await when the loop differs
+        # or is gone.
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
 
         logger.debug(
             f"ResultCache initialized with max_size={self.config.result_cache_max_size}, ttl={self.config.result_cache_ttl}"
@@ -153,26 +161,109 @@ class ResultCache:
         await self.stop()
 
     async def start(self) -> None:
-        """Start the cache and background cleanup task."""
-        if self.config.enable_result_caching:
-            self._shutdown_event = asyncio.Event()
-            self._cleanup_task = asyncio.create_task(self._cleanup_loop())
-            logger.info("ResultCache started with background cleanup")
-        else:
+        """Start the cache and background cleanup task.
+
+        Idempotent and loop-aware: if a cleanup task is already running on the
+        current loop it is left in place. If a stale task from a previous
+        (now different or closed) loop exists, it is discarded without a
+        cross-loop await — the old loop owns its own teardown. This prevents
+        the ``got Future attached to a different loop`` deadlock when a client
+        is reused across event loops / threads (#623).
+        """
+        if not self.config.enable_result_caching:
             logger.info("ResultCache started (caching disabled)")
+            return
+
+        try:
+            current_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            current_loop = None
+
+        # If we already have a cleanup task bound to the current loop and it's
+        # still alive, there's nothing to do.
+        if (
+            self._cleanup_task is not None
+            and not self._cleanup_task.done()
+            and self._loop is current_loop
+        ):
+            return
+
+        # Drop any stale task from a previous loop without awaiting it. The
+        # prior loop (if still alive) will observe the cancellation; if it's
+        # gone, the task is unreachable garbage and letting it go is safe.
+        if self._cleanup_task is not None and self._loop is not current_loop:
+            self._discard_stale_cleanup_task()
+
+        self._loop = current_loop
+        self._shutdown_event = asyncio.Event()
+        self._cleanup_task = asyncio.create_task(self._cleanup_loop())
+        logger.info("ResultCache started with background cleanup")
+
+    def _discard_stale_cleanup_task(self) -> None:
+        """Best-effort cancel of a cleanup task bound to a different loop.
+
+        Never awaits — a cross-loop await is exactly what deadlocks. If the
+        owning loop is still running we schedule the cancel on it; otherwise
+        we simply drop the reference.
+        """
+        task = self._cleanup_task
+        old_loop = self._loop
+        self._cleanup_task = None
+        self._shutdown_event = None
+        if task is None or task.done():
+            return
+        try:
+            if old_loop is not None and not old_loop.is_closed():
+                # Cancel on the loop that owns the task, thread-safely.
+                old_loop.call_soon_threadsafe(task.cancel)
+        except Exception:
+            # The old loop may be mid-teardown; the task is unreachable and
+            # will be collected. Nothing actionable here.
+            logger.debug("Could not cancel stale cleanup task", exc_info=True)
 
     async def stop(self) -> None:
-        """Stop the cache and cleanup background tasks."""
-        if self._shutdown_event is not None:
-            self._shutdown_event.set()
+        """Stop the cache and cleanup background tasks.
 
-        if self._cleanup_task:
-            self._cleanup_task.cancel()
+        Loop-aware: only awaits the cleanup task when we're on the same loop
+        it was created on. When stop() is called from a different loop (the
+        threading/asyncio mixing case in #623), awaiting the task would raise
+        ``got Future attached to a different loop`` / hang, so we cancel it on
+        its owning loop without awaiting. The cache contents are always
+        cleared regardless, since that path only needs the thread lock.
+        """
+        try:
+            current_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            current_loop = None
+
+        task = self._cleanup_task
+        shutdown_event = self._shutdown_event
+        owning_loop = self._loop
+        same_loop = owning_loop is current_loop
+
+        if task is not None and same_loop:
+            # Safe path: signal shutdown and await the task on its own loop.
+            if shutdown_event is not None:
+                shutdown_event.set()
+            task.cancel()
             try:
-                await self._cleanup_task
+                await task
             except asyncio.CancelledError:
                 pass
+            except RuntimeError:
+                # Defensive: if the loop association is somehow inconsistent,
+                # don't let teardown wedge the caller.
+                logger.debug(
+                    "Cleanup task await raised RuntimeError during stop",
+                    exc_info=True,
+                )
+        elif task is not None:
+            # Cross-loop stop: cancel on the owning loop, never await here.
+            self._discard_stale_cleanup_task()
+
+        self._cleanup_task = None
         self._shutdown_event = None
+        self._loop = None
 
         with self._lock:
             self._cache.clear()
@@ -407,22 +498,27 @@ class ResultCache:
             try:
                 await asyncio.sleep(self._cleanup_interval)
 
+                # Keep the critical section minimal: only the expiry sweep
+                # needs the lock. Computing/formatting stats re-acquires the
+                # lock internally (get_stats), so doing it outside avoids
+                # holding the lock across extra work and keeps contention low
+                # for concurrent sync callers (get/set) on other threads.
                 with self._lock:
                     expired_count = self._cleanup_expired()
 
-                    if expired_count > 0:
-                        logger.debug(
-                            f"Cleaned up {expired_count} expired cache entries"
-                        )
+                if expired_count > 0:
+                    logger.debug(
+                        f"Cleaned up {expired_count} expired cache entries"
+                    )
 
-                    # Log cache stats if performance logging is enabled
-                    if self.config.enable_performance_logging:
-                        stats = self.get_stats()
-                        logger.debug(
-                            f"Cache stats: {stats['size']}/{stats['max_size']} entries, "
-                            f"{stats['hit_rate']:.1f}% hit rate, "
-                            f"{stats['evictions']} evictions"
-                        )
+                # Log cache stats if performance logging is enabled
+                if self.config.enable_performance_logging:
+                    stats = self.get_stats()
+                    logger.debug(
+                        f"Cache stats: {stats['size']}/{stats['max_size']} entries, "
+                        f"{stats['hit_rate']:.1f}% hit rate, "
+                        f"{stats['evictions']} evictions"
+                    )
 
             except asyncio.CancelledError:
                 break
