@@ -6,6 +6,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.112-rc.2] - 2026-07-21
+
+
+### Chores
+
+- Chore(deps): bump axios (#802)
+
+Bumps the npm_and_yarn group with 1 update in the /sdk/typescript directory: [axios](https://github.com/axios/axios).
+
+
+Updates `axios` from 1.16.0 to 1.18.0
+- [Release notes](https://github.com/axios/axios/releases)
+- [Changelog](https://github.com/axios/axios/blob/v1.x/CHANGELOG.md)
+- [Commits](https://github.com/axios/axios/compare/v1.16.0...v1.18.0)
+
+---
+updated-dependencies:
+- dependency-name: axios
+  dependency-version: 1.18.0
+  dependency-type: direct:production
+  dependency-group: npm_and_yarn
+...
+
+Signed-off-by: dependabot[bot] <support@github.com>
+Co-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com> (4867040)
+
 ## [0.1.112-rc.1] - 2026-07-20
 
 
