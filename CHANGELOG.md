@@ -6,6 +6,94 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.113] - 2026-07-21
+
+## [0.1.113-rc.1] - 2026-07-21
+
+
+### Added
+
+- Feat: node-declared reasoner descriptions + entry points in discovery and af ls (#805)
+
+* feat(control-plane): per-reasoner descriptions + entrypoint surfacing in discovery and catalog
+
+ReasonerDefinition/SkillDefinition gain a description field (rides in the
+reasoners JSON blob — no migration). Discovery prefers the record-level
+description and falls back to the legacy agent metadata map; the serverless
+ingest path stops dropping the description it already parsed. The reasoner
+catalog (af ls backend) returns description+tags, supports entrypoints=true,
+and sorts entrypoint-tagged rows first among never-run rows. Adds
+types.TagEntrypoint as the shared tag convention.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(cli): af ls shows reasoner descriptions and supports --entrypoints
+
+Rows render a trailing description column ([entrypoint]-labeled when the
+reasoner carries the entrypoint tag, truncated to one line); -e/--entrypoints
+filters to entry points so a caller browsing a node sees its intended surface.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(sdk-go): transmit reasoner descriptions to the control plane
+
+WithDescription was captured locally for CLI help but never sent at
+registration. ReasonerDefinition gains the description field and registerNode
+copies it, so discovery and af ls can surface it.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(sdk-python): description kwarg on @reasoner/@skill with docstring default
+
+@app.reasoner(description=...) / @app.skill(description=...) register a
+caller-facing summary with the control plane; without it, the first paragraph
+of the function docstring (whitespace-collapsed) is used. Routers forward the
+kwarg through include_router unchanged. Payloads without a description are
+byte-identical to before, so older control planes are unaffected.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (075dd32)
+
+## [0.1.112] - 2026-07-21
+
+## [0.1.112-rc.3] - 2026-07-21
+
+
+### Fixed
+
+- Fix: prevent exception details in agent server responses (#800)
+
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com> (26c8428)
+
+## [0.1.112-rc.2] - 2026-07-21
+
+
+### Chores
+
+- Chore(deps): bump axios (#802)
+
+Bumps the npm_and_yarn group with 1 update in the /sdk/typescript directory: [axios](https://github.com/axios/axios).
+
+
+Updates `axios` from 1.16.0 to 1.18.0
+- [Release notes](https://github.com/axios/axios/releases)
+- [Changelog](https://github.com/axios/axios/blob/v1.x/CHANGELOG.md)
+- [Commits](https://github.com/axios/axios/compare/v1.16.0...v1.18.0)
+
+---
+updated-dependencies:
+- dependency-name: axios
+  dependency-version: 1.18.0
+  dependency-type: direct:production
+  dependency-group: npm_and_yarn
+...
+
+Signed-off-by: dependabot[bot] <support@github.com>
+Co-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com> (4867040)
+
 ## [0.1.112-rc.1] - 2026-07-20
 
 
