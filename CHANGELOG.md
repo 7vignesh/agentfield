@@ -6,6 +6,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.117-rc.2] - 2026-07-24
+
+
+### Other
+
+- Register pprof debug endpoints behind admin-token auth (#809)
+
+* issue/pprof-admin-endpoints: register pprof debug endpoints behind admin-token auth
+
+Add /debug/pprof/ routes gated by X-Admin-Token (returns 401 on missing/wrong
+token, 200 with valid token). Named profiles (goroutine, heap, etc.) share the
+same gating. When no admin token is configured the endpoints are open,
+consistent with existing AdminTokenAuth behavior.
+
+* fix(server): complete pprof admin endpoint handling
+
+* chore(skills): sync embedded skill mirrors on branch
+
+Realigns embedded mirrors with skills/ sources inherited from the main
+merge so skillkit drift tests pass branch-locally.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (a2e13d0)
+
 ## [0.1.117-rc.1] - 2026-07-24
 
 
