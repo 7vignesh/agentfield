@@ -6,6 +6,47 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.117-rc.3] - 2026-07-24
+
+
+### Other
+
+- Add tests for agentic handlers: query, batch, discover (#810)
+
+* issue/agentic-handler-tests: add tests for query, batch, and discover handlers
+
+Adds three new test files covering edge cases and missing code paths:
+- query_handler_test.go: default limit clamping, invalid RFC3339 dates,
+  offset out-of-bounds, missing resource field, response structure
+- batch_test.go: invalid JSON, single/max operations, POST bodies,
+  sub-request errors, auth header propagation, concurrent integrity
+- discover_test.go: method filter, limit clamp >100, combined filters,
+  see_also references, Smart404 suggestions with auth filtering
+
+Coverage: 91.5% -> 92.6% (BatchHandler: 79.4% -> 94.1%,
+DiscoverHandler: 92.3% -> 100.0%)
+
+* fix(agentic): preserve batch caller identity
+
+* chore(skills): sync embedded skill mirrors on branch
+
+Realigns embedded mirrors with skills/ sources inherited from the main
+merge so skillkit drift tests pass branch-locally.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* test(agentic): cover past-end offset branches and node-ID batch forwarding
+
+Closes the patch-coverage gap on the caller-identity fix: the empty-page
+branches for executions/workflows/sessions (only agents was exercised)
+and the X-Agent-Node-ID forwarding branch in batch sub-requests.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (fde785d)
+
 ## [0.1.117-rc.2] - 2026-07-24
 
 
