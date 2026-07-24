@@ -6,6 +6,56 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.116-rc.1] - 2026-07-24
+
+
+### Fixed
+
+- Fix(skills): sync the full catalog, unblock legacy reconcile, retire the /agentfield shim (#826)
+
+* fix(skillkit): retire the /agentfield command shim, clean up stale links
+
+The shim predates slash-invocable skills: Claude Code now registers
+/agentfield from the skill itself, so the bundled commands/agentfield.md
+only produced a duplicate picker entry. Drop it from the package (skill
+bumped to 0.5.2 so machines already on 0.5.1 actually reinstall), and
+teach the claude-code target to remove command links whose target lives
+under the skill's canonical store but is no longer shipped — so existing
+machines lose the shim on their next skill update instead of keeping a
+dangling symlink. User files, live links, and other skills' commands are
+untouched; a blocked commands dir still surfaces through installCommands'
+existing error path.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(desktop,installer): install the full skill catalog, not a hardcoded list
+
+Both the desktop syncSkills and install.sh looped over a hardcoded
+[agentfield, agentfield-use], so agentfield-personal (new in v0.1.115)
+never reached existing installs — updates bumped the two known skills
+and silently skipped new catalog entries. A no-name `af skill install`
+already installs the binary's entire catalog in one process, so call
+that instead everywhere; future catalog additions now propagate without
+touching the desktop app or the installer script.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(skillkit): reconcile tolerates legacy manual-method targets
+
+Legacy standalone agentfield-multi-reasoner-builder installs recorded
+cursor/windsurf integrations with method "manual" — nothing on disk, the
+user pasted rules into the app's settings UI. removeRecordedTarget only
+knew symlink and marker-block, so reconciliation errored and blocked
+every `af skill install` on such machines (hit in the wild upgrading to
+v0.1.115). Manual targets are now removable no-ops; genuinely unknown
+methods still fail loud.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (bac67d0)
+
 ## [0.1.115] - 2026-07-23
 
 ## [0.1.115-rc.2] - 2026-07-23
