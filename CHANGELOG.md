@@ -6,6 +6,84 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.117-rc.5] - 2026-07-24
+
+
+### Added
+
+- Feat(control-plane): embedded MCP server at /mcp (zero-setup harness integration) (#817)
+
+* feat(control-plane): add AGENTFIELD_MCP_ENABLED config toggle
+
+Introduce MCPConfig under features with an IsEnabled() default of true so
+the embedded MCP server ships on by default. AGENTFIELD_MCP_ENABLED=false
+flips it off via the existing env-override precedence path.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(control-plane): embedded MCP server handler and tools
+
+Add a stateless streamable-HTTP JSON-RPC 2.0 handler that exposes AgentField
+discovery and execution as MCP tools, calling the existing service layer
+directly (no loopback HTTP). Supports initialize, notifications, ping,
+tools/list and tools/call; rejects batch arrays; unknown methods return
+-32601.
+
+Five tools: discover_agents, get_reasoner_schema, execute_reasoner (starts an
+async run), get_run, and wait_run (server-side poll with a hard timeout cap so
+a tool call can never hang a harness). Results are single compact-JSON text
+content blocks; validation/business failures come back as isError tool
+results rather than transport errors.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(control-plane): serve MCP at /mcp on the control-plane port
+
+Register the embedded MCP server on the same Gin router as the REST API:
+POST /mcp (JSON-RPC), GET /mcp -> 405, OPTIONS /mcp -> 204. The route is
+gated by AGENTFIELD_MCP_ENABLED and simply not registered (so /mcp 404s) when
+disabled. It lives behind the same global API-key auth and trust domain as
+/api/v1 — no extra process, no extra setup; harnesses connect with one
+command.
+
+Thread the build version through server.SetBuildVersion so the MCP
+serverInfo reports the real control-plane version.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(skills): document zero-setup MCP in agentfield-use
+
+Add an "MCP (zero-setup)" section near the top of the agentfield-use skill
+(both the repo copy and the embedded skill_data copy, kept identical): the
+control plane serves MCP at <server>/mcp, with the one-liner claude mcp add
+command and a generic streamable-HTTP note for other clients. The CLI/REST
+flow remains the documented full-power path. Bump the skill version to 0.4.0.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* docs: MCP integration guide
+
+Add docs/mcp-integration.md covering the endpoint, the five tools, the
+security posture (same trust domain and API-key auth as the REST API), the
+disable flag, and an example tool-call flow. Link it from the README feature
+table.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix: enforce MCP execution authorization
+
+* chore(skills): sync embedded agentfield-use mirror on branch
+
+Branch-local drift: this PR merged main (incl. #827's skill edit) while
+carrying its own mirror copy; sync-embedded-skills.sh realigns them so the
+skillkit drift tests pass regardless of #828.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (b9a07d0)
+
 ## [0.1.117-rc.4] - 2026-07-24
 
 
