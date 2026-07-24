@@ -6,6 +6,50 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.117-rc.1] - 2026-07-24
+
+
+### Documentation
+
+- Docs(skills): agentfield-use — default to full batch dispatch; canary-validate after node reconfig (#827)
+
+Two additions to the concurrency guidance:
+
+- Make the batch default explicit: when N independent jobs arrive, dispatch
+  all of them up front and poll as a group, rather than one-at-a-time.
+
+- Add the one exception: right after a node's runtime config changes
+  (provider/model/bin path via af secrets set + restart), send ONE
+  representative call and verify it did real work (nonzero cost/duration,
+  plausible output) before fanning out. A misconfigured harness can crash
+  instantly while the run still reports succeeded-with-empty-results, and
+  an agent that posts externally (e.g. GitHub reviews) publishes that
+  garbage under the user's identity once per dispatched call.
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (613138b)
+
+
+
+### Other
+
+- Issue/presence-start-guard: guard PresenceManager.Start against duplicate sweep goroutines (#808)
+
+Start() now uses sync.Once (mirroring the existing stopOnce pattern) to
+ensure only one sweep loop is ever spawned per PresenceManager instance.
+
+Adds two regression tests:
+- TestPresenceManager_Start_Idempotent: counts goroutines before/after
+  multiple Start() calls to assert no duplicate sweep loops spawn.
+- TestPresenceManager_ExpireCallback_OncePerExpiration: counts callback
+  invocations across multiple sweep cycles to assert the callback fires
+  at most once per expired node lease.
+
+Verification: temporarily reverted the startOnce guard and confirmed
+TestPresenceManager_Start_Idempotent fails with delta=3 (3 extra
+goroutines spawned by duplicate Start() calls), proving the regression
+test catches the bug. Restored the guard; all presence manager tests
+pass and go vet is clean. (4aaf3b0)
+
 ## [0.1.116] - 2026-07-24
 
 ## [0.1.116-rc.1] - 2026-07-24
