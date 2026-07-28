@@ -365,12 +365,17 @@ class AsyncExecutionManager:
         self._event_stream_task = None
         self._loop = None
 
-        # Cancel all active executions
-        async with self._execution_lock:
-            for execution in self._executions.values():
-                if execution.is_active:
-                    execution.cancel("Manager shutdown")
-                    self._release_capacity_for_execution(execution)
+        # Cancel all active executions. The _execution_lock is an asyncio.Lock
+        # bound to the owning loop — taking it from a foreign loop would raise
+        # "got Future attached to a different loop". On a cross-loop stop we
+        # skip this section: the executions will be cancelled when the owning
+        # loop tears down or the manager is restarted (#623 review feedback).
+        if owning_loop is current_loop:
+            async with self._execution_lock:
+                for execution in self._executions.values():
+                    if execution.is_active:
+                        execution.cancel("Manager shutdown")
+                        self._release_capacity_for_execution(execution)
 
         # Stop components
         await self.connection_manager.close()

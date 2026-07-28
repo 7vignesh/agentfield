@@ -236,9 +236,16 @@ class ResultCache:
             shutdown_event.set()
         await cancel_and_await_if_same_loop(task, owning_loop)
 
-        self._cleanup_task = None
-        self._shutdown_event = None
-        self._loop = None
+        # Compare-before-clear: only null the references if they're still the
+        # ones we snapshotted. A concurrent start() on another thread/loop
+        # could have installed fresh references in between; clobbering those
+        # would orphan the new cleanup task (#623 review feedback).
+        if self._cleanup_task is task:
+            self._cleanup_task = None
+        if self._shutdown_event is shutdown_event:
+            self._shutdown_event = None
+        if self._loop is owning_loop:
+            self._loop = None
 
         with self._lock:
             self._cache.clear()
