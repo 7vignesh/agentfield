@@ -6,6 +6,44 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.118-rc.3] - 2026-07-29
+
+
+### Other
+
+- Add MiniMax music generation provider (#789)
+
+* Add MiniMax music generation provider
+
+* fix: normalize MiniMax hex audio output
+
+* style: split one-line imports in generate_music (E401)
+
+First CI run on this branch — the lint gate flagged the combined
+import line; split to match the file's function-level import style.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* refactor: fold music generation into the unified MiniMaxProvider
+
+After #783 merged, this branch carried a second MiniMaxProvider class —
+Python silently rebinds the name to whichever definition comes later, so
+the music-only class (and the feature) became unreachable. Move
+generate_music into the video provider class: supported_modalities is now
+["video", "music"], the music endpoint derives from the same
+base_url/MINIMAX_BASE_URL configuration the video path and AIConfig use
+(replacing the region kwarg), and the duplicate "minimax" registry key
+is gone. Music url/hex tests keep their contract; added an endpoint
+routing test for the configured base URL.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: octo-patch <266937838+octo-patch@users.noreply.github.com>
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com>
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (4c8546c)
+
 ## [0.1.118-rc.2] - 2026-07-29
 
 
