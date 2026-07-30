@@ -6,6 +6,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.118-rc.6] - 2026-07-30
+
+
+### Added
+
+- Feat(deploy): cloud control-plane image that can install and run agents in-container (#841)
+
+* feat(deploy): add cloud control-plane image with agent toolchains
+
+Debian-slim variant carrying git, python3+venv+pip, node 22, the Go
+toolchain, and the full af CLI so the HTTP install API can install and
+run agent nodes inside the same container (single-box cloud topology).
+AGENTFIELD_HOME=/data puts everything stateful on one volume; tini
+reaps agent child processes. The distroless image stays the default.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* ci(release): publish agentfield/control-plane-cloud alongside the base image
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (86fdba0)
+
 ## [0.1.118-rc.5] - 2026-07-30
 
 
