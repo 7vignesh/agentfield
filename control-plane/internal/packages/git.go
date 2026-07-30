@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -248,30 +249,48 @@ func (gi *GitInstaller) InstallFromGit(gitURL string, force bool) error {
 	return nil
 }
 
+// safeGitRefPattern matches refs (branches, tags, commits) that cannot be
+// mistaken for git options: they must start with an alphanumeric character.
+// Ref values can originate from user input (CLI args or the HTTP install
+// API), so anything option-like could otherwise smuggle flags such as
+// --upload-pack into the git invocation.
+var safeGitRefPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/-]*$`)
+
+// validateCloneArgs rejects ref/URL values that git would parse as options
+// rather than positional arguments.
+func validateCloneArgs(info *GitPackageInfo) error {
+	if info.Ref != "" && !safeGitRefPattern.MatchString(info.Ref) {
+		return fmt.Errorf("invalid git ref %q: must start with an alphanumeric character and contain only [A-Za-z0-9._/-]", info.Ref)
+	}
+	if strings.HasPrefix(info.CloneURL, "-") {
+		return fmt.Errorf("invalid clone URL %q: must not start with '-'", info.CloneURL)
+	}
+	return nil
+}
+
 // cloneRepository clones the Git repository with optimizations
 func (gi *GitInstaller) cloneRepository(info *GitPackageInfo) (string, error) {
+	if err := validateCloneArgs(info); err != nil {
+		return "", err
+	}
+
 	// Create temporary directory
 	tempDir, err := os.MkdirTemp("", "agentfield-git-install-")
 	if err != nil {
 		return "", fmt.Errorf("failed to create temp directory: %w", err)
 	}
 
-	// Build git clone command with optimizations
-	args := []string{"clone"}
-
-	// Shallow clone for efficiency (only latest commit)
-	args = append(args, "--depth", "1")
-
-	// Clone specific branch/tag if specified
-	if info.Ref != "" {
-		args = append(args, "--branch", info.Ref)
+	// Fixed-shape invocations: the user-influenced values (ref, clone URL)
+	// only ever occupy option-value or post-"--" positional slots, so git can
+	// never parse them as flags. The ref is re-validated inline against the
+	// anchored safeGitRefPattern immediately before use.
+	var cmd *exec.Cmd
+	if ref := info.Ref; ref != "" && safeGitRefPattern.MatchString(ref) {
+		cmd = exec.Command("git", "clone", "--depth", "1", "--branch", ref, "--", info.CloneURL, tempDir)
+	} else {
+		cmd = exec.Command("git", "clone", "--depth", "1", "--", info.CloneURL, tempDir)
 	}
-
-	// Add URLs
-	args = append(args, info.CloneURL, tempDir)
-
-	// Execute git clone
-	cmd := exec.Command("git", args...)
+	args := cmd.Args[1:]
 
 	// Capture both stdout and stderr for better error messages
 	var stdout, stderr bytes.Buffer
