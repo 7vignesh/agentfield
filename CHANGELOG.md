@@ -6,6 +6,152 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.118-rc.7] - 2026-07-30
+
+
+### Added
+
+- Feat(desktop): one management path — agents managed via the control-plane API (#842)
+
+* feat(desktop): add typed control-plane API client
+
+Late-bound base URL, optional X-API-Key, typed errors, install-job
+watching with incremental line streaming, and hasInstallApi feature
+detection for control planes predating the HTTP install API.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(desktop): manage agents exclusively through the control-plane API
+
+One management path: install/update/uninstall, start/stop/restart,
+secrets, and the installed-agent listing all go over HTTP to the
+control plane — local or (future) cloud. The CLI remains only for
+booting the local control plane, bundled-binary management, and
+skills install. Control planes predating the install API surface an
+update prompt instead of a CLI fallback. The server now owns secret
+scope resolution; the desktop no longer parses manifest scopes.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(desktop): filter package listing to actually-installed rows
+
+The packages endpoint also returns catalog/marketplace rows; without
+filtering on the new install_status field the Agents panel would show
+never-installed catalog agents. Rows without the field (older control
+planes) are kept. Found by live end-to-end testing; pairs with the
+control-plane sync reconciliation fix.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (00e0d31)
+
+
+
+### Fixed
+
+- Fix(control-plane): package sync reconciliation + install_status on the packages listing (#843)
+
+* fix(control-plane): reconcile package registry sync instead of insert-only
+
+SyncPackagesFromRegistry only ever inserted rows, so a pre-seeded
+catalog row never upgraded to installed and uninstalled packages kept
+their installed status forever. It now upserts registry entries
+(upgrading catalog rows) and downgrades installed rows missing from
+the registry to uninstalled; an absent registry file downgrades all.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(control-plane): expose install_status and installed_at on package listing
+
+The listing's status field is a derived configuration summary; clients
+listing actually-installed packages (the desktop app) need the raw
+registry-backed state on the wire.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(control-plane): sync registry to DB synchronously after API mutations
+
+Install/update/uninstall over HTTP relied on the async fsnotify watcher
+to propagate installed.yaml changes to the DB, so a client listing
+packages immediately after a mutation read stale state. The job manager
+now invokes a registry-change hook (wired to SyncPackagesFromRegistry)
+after each successful mutation.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (bc16027)
+
+
+
+### Testing
+
+- Test: harden the install/uninstall/sync workflows behind the desktop convergence (#844)
+
+* fix(control-plane): registry sync keeps the package's real install timestamp
+
+Net-new rows created by SyncPackagesFromRegistry now carry the registry
+entry's installed_at (RFC3339) instead of the sync time, with a now()
+fallback when the registry has no timestamp. Adds contract tests for
+timestamp fidelity, InstalledAt/ConfigurationStatus preservation across
+re-syncs, idempotence, storage-failure tolerance, and a wiring test
+proving a job-manager uninstall reaches the packages DB through the
+registry-change hook.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(control-plane): package uninstall takes the active-job slot
+
+Manager.Uninstall now returns ErrBusy while an install/update job is in
+flight instead of racing it (callers already map ErrBusy to 409). Adds
+tests for the hook-before-succeeded ordering guarantee, registry-change
+notification on the update path, sourceFromRegistry ref stripping, and
+the uninstall-vs-active-install race. Package stays at 100% coverage.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* test(control-plane): enforce the desktop wire contract and route registration
+
+Producer-side assertions for install_status (raw status vocabulary) and
+installed_at (RFC3339 UTC, omitted for zero time) on the packages
+listing — the fields the desktop's install filter consumes. Adds exact
+method+path registration tests for the six package-management routes,
+fixes the uninstall handler test to use POST like the real route, and
+covers force=true propagation plus the job JSON shape watchInstallJob
+parses.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(cli): scope uninstall --force to each command invocation
+
+The force flag was a package-level global bound at construction, so a
+forced uninstall leaked --force into later invocations in the same
+process. Scoped per NewUninstallCommand. Adds behavioral tests: happy
+removal (registry entry + package dir), running-package refusal,
+--force killing the tracked process, unknown package, cross-invocation
+flag isolation, and install --path threading to InstallOptions.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* test(desktop): edge-case coverage for install, uninstall, and secrets flows
+
+Covers watchInstallJob job-eviction (404 disappeared) and log-cap
+shrinking-lines replay guard, mid-flight 404 version skew in
+installAgent/updateAgent/uninstallAgent, isInstalledPackage vocabulary
+incl. old-CP fail-open, listStoredSecrets and revokeStoredSecret
+(previously untested), the catalog-row filter at all three secrets call
+sites, and offline/error-sentinel fallbacks. 323 tests total, up from
+291.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (2657e11)
+
 ## [0.1.118-rc.6] - 2026-07-30
 
 
