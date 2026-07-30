@@ -6,6 +6,71 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.118-rc.4] - 2026-07-30
+
+
+### Added
+
+- Feat(desktop): sign and notarize macOS release builds (#840)
+
+* feat(desktop): sign and notarize macOS release builds
+
+The desktop-installers release job shipped ad-hoc-signed DMGs, so
+Gatekeeper blocked every download ("Apple could not verify...") and on
+macOS 15 users had to dig through Privacy & Security to launch the app.
+
+Sign with the Developer ID cert and notarize through Apple:
+
+- package.json mac config: hardenedRuntime + notarize (electron-builder
+  signs every Mach-O in the bundle including the bundled af/af-tray,
+  then notarizes and staples the .app before packing DMG/zip from it).
+- release.yml: feed CSC_LINK/CSC_KEY_PASSWORD and APPLE_* secrets to the
+  macOS leg only (CSC_LINK means a Windows cert on the Windows leg, so
+  the steps are split per OS). Incomplete secrets degrade to an
+  unsigned/un-notarized build with a workflow warning instead of
+  failing the release.
+- New macOS post-build step notarizes + staples the DMG container
+  itself (offline Gatekeeper acceptance) and hard-verifies the shipped
+  artifacts with stapler validate + spctl assess, so a signing
+  regression fails the release run rather than surfacing on users'
+  machines.
+
+PR CI (desktop.yml) stays secret-less and unsigned; the new config is
+inert there and the existing ad-hoc afterPack hook still applies.
+Windows Authenticode signing remains a separate follow-up.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* ci(desktop): add manual signing-secrets verification job
+
+Dispatch-only job on the Desktop CI workflow that imports the
+Developer ID cert into a temporary keychain (mirroring what
+electron-builder does with CSC_LINK) and makes a real authenticated
+call to the Apple notary service, so the signing/notarization secrets
+can be proven valid without cutting a release. Skipped on pull_request
+and push runs.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (7ec8536)
+
+- Feat(desktop): register af on the shell PATH on macOS/Linux too (#839)
+
+The app already provisions its bundled CLI into ~/.agentfield/bin and
+registers that directory on the user PATH on Windows — but on macOS and
+Linux it left PATH setup to the curl installer, so a desktop-only install
+gave terminals no `af` command.
+
+registerPosixUserPath now appends a PATH entry to the user's shell startup
+file (bash/zsh/fish), phrased identically to the curl installer's
+configure_path and skipped when the file already mentions the bin dir — so
+the two installers stay convergent and idempotent. Best-effort: an unknown
+shell or unwritable profile never fails the CLI install.
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (72a3836)
+
 ## [0.1.118-rc.3] - 2026-07-29
 
 
