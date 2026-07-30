@@ -6,6 +6,88 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.118-rc.5] - 2026-07-30
+
+
+### Added
+
+- Feat(control-plane): HTTP API for package install/update/uninstall + encrypted secrets (#837)
+
+* feat(control-plane): add async package install job manager
+
+Wraps PackageService install/update/uninstall behind an in-memory job
+manager: one active job at a time, GitHub-only source validation,
+ANSI-free coarse progress lines, and run-state restore on update.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(control-plane): add package install/update/uninstall HTTP handlers
+
+POST install returns 202 with an async job id; job status is pollable.
+400 on non-GitHub sources, 409 while another job is active.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(control-plane): add encrypted agent secrets HTTP API
+
+Writes the AES-256-GCM store that RunAgent actually injects from,
+unlike the existing /env endpoints whose .env file nothing reads.
+Listing returns key names plus manifest-declared unset keys; values
+are never returned or logged.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(control-plane): wire install jobs and secrets endpoints into UI routes
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(control-plane): harden git clone against argument injection
+
+CodeQL flagged user-provided install sources flowing into
+exec.Command("git", ...). Reject option-like refs/URLs at the sink,
+terminate git option parsing with --, and reject dash-prefixed
+owner/repo/subdir segments in the HTTP install source validator.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* test(control-plane): cover error branches in install and secrets APIs
+
+Raises patch coverage on the new endpoints to 100% per file,
+clearing the >=80% patch-coverage CI gate.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(control-plane): use fixed-shape git clone invocations for CodeQL
+
+CodeQL's double-dash sanitizer matches the argument layout syntactically
+in the exec.Command call; the dynamically appended slice hid it.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(control-plane): guard git ref with anchored allowlist pattern
+
+The --branch value sits before the -- separator by necessity, so it
+needs its own sanitizer: an anchored regexp validated at the boundary
+and re-checked inline immediately before the exec call.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(control-plane): scope support for agent secrets API
+
+Secrets now default to the global scope unless the agent's manifest
+declares scope: node — the same rule af secrets set and the desktop
+follow — with an explicit scope override on PUT/DELETE. The listing
+reports effective resolution (node shadows global) and includes
+undeclared node-scoped keys, matching the runner's injection. Adds
+GET /api/ui/v1/secrets: store-wide key+scope refs, mirroring
+af secrets ls.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (5e79bc0)
+
 ## [0.1.118-rc.4] - 2026-07-30
 
 
