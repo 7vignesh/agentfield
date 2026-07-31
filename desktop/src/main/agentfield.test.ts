@@ -7,6 +7,7 @@ import {
   checkControlPlane,
   deriveAgentBadge,
   fetchControlPlaneNodes,
+  fetchDashboardMetrics,
   fetchExecutions,
   fetchUsageStats,
   getAgentFieldHome,
@@ -19,6 +20,7 @@ import {
 import { DEFAULT_CONTROL_PLANE_PORT } from './ports'
 import { installCommand, sanitizeInstallOutput } from './installer'
 import { CATALOG, catalogEntry } from '../shared/catalog'
+import { setCloudConnection } from './connection'
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -31,13 +33,15 @@ const API_PACKAGES: PackageInfo[] = [
   {
     id: 'pr-af', name: 'pr-af', version: '0.1.0',
     description: 'Opens draft pull requests from a task description',
-    status: 'running', install_path: '/home/abir/.agentfield/packages/pr-af',
+    status: 'configured', install_status: 'running',
+    install_path: '/home/abir/.agentfield/packages/pr-af',
     port: 9001, process_id: 4242, configuration_required: false,
     configuration_complete: true, author: ''
   },
   {
     id: 'swe-af', name: 'swe-af', version: '0.2.1',
-    description: 'Software engineering agent', status: 'stopped', install_path: '',
+    description: 'Software engineering agent', status: 'not_configured',
+    install_status: 'stopped', install_path: '',
     configuration_required: false, configuration_complete: true, author: ''
   }
 ]
@@ -64,6 +68,51 @@ describe('active base URL', () => {
     }
     await checkControlPlane(undefined, fetchImpl)
     expect(seen).toEqual(['http://localhost:9091/health'])
+  })
+})
+
+describe('raw control-plane fetch authentication', () => {
+  afterEach(() => setActiveControlPlanePort(DEFAULT_CONTROL_PLANE_PORT))
+
+  async function callRawReaders(fetchImpl: FetchLike): Promise<void> {
+    await checkControlPlane(undefined, fetchImpl)
+    await fetchControlPlaneNodes(undefined, fetchImpl)
+    await fetchExecutions(undefined, fetchImpl)
+    await fetchDashboardMetrics(undefined, fetchImpl)
+    await fetchUsageStats(undefined, fetchImpl)
+  }
+
+  it('adds X-API-Key to every raw reader in cloud mode', async () => {
+    setCloudConnection('https://cp.example', 'cloud-key')
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.endsWith('/health')) return jsonResponse({ status: 'healthy' })
+      if (url.includes('/nodes')) return jsonResponse({ nodes: [] })
+      if (url.includes('/workflow-runs')) return jsonResponse({ runs: [] })
+      if (url.includes('/dashboard/summary')) return jsonResponse({})
+      return jsonResponse({ totals: {} })
+    }) as FetchLike
+    await callRawReaders(fetchImpl)
+    expect(vi.mocked(fetchImpl).mock.calls).toHaveLength(5)
+    for (const [, init] of vi.mocked(fetchImpl).mock.calls) {
+      expect(new Headers(init?.headers).get('X-API-Key')).toBe('cloud-key')
+    }
+  })
+
+  it('omits X-API-Key from every raw reader in local mode', async () => {
+    setActiveControlPlanePort(8080)
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.endsWith('/health')) return jsonResponse({ status: 'healthy' })
+      if (url.includes('/nodes')) return jsonResponse({ nodes: [] })
+      if (url.includes('/workflow-runs')) return jsonResponse({ runs: [] })
+      if (url.includes('/dashboard/summary')) return jsonResponse({})
+      return jsonResponse({ totals: {} })
+    }) as FetchLike
+    await callRawReaders(fetchImpl)
+    for (const [, init] of vi.mocked(fetchImpl).mock.calls) {
+      expect(new Headers(init?.headers).has('X-API-Key')).toBe(false)
+    }
   })
 })
 
@@ -110,6 +159,15 @@ describe('readInstalledAgents', () => {
     expect(result).toEqual({ exists: true, agents: [] })
   })
 
+  it('prefers install_status and falls back to status for old servers', async () => {
+    const lifecycle = { ...API_PACKAGES[0], status: 'not_configured', install_status: 'installed' }
+    const legacy = { ...API_PACKAGES[1], status: 'running', install_status: undefined }
+
+    const result = await readInstalledAgents(packagesClient([lifecycle, legacy]))
+
+    expect(result.agents.map((agent) => agent.status)).toEqual(['installed', 'running'])
+  })
+
   it('surfaces API failures without throwing', async () => {
     const client = packagesClient()
     vi.mocked(client.listPackages).mockRejectedValue(new Error('offline'))
@@ -129,6 +187,8 @@ describe('deriveAgentBadge', () => {
     ['running', false, 'active', 'running'],
     ['stopped', false, null, 'stopped'],
     ['stopped', false, 'active', 'stopped'],
+    ['installed', false, null, 'unknown'],
+    ['installed', false, 'active', 'unknown'],
     ['error', false, null, 'unknown'],
     [undefined, false, null, 'unknown'],
     // CP view available -> cross-check
@@ -142,6 +202,9 @@ describe('deriveAgentBadge', () => {
     ['stopped', true, 'inactive', 'stopped'],
     ['stopped', true, 'unknown', 'stopped'],
     ['stopped', true, null, 'stopped'],
+    ['installed', true, 'active', 'running'],
+    ['installed', true, 'inactive', 'stopped'],
+    ['installed', true, null, 'stopped'],
     ['error', true, 'active', 'unknown'],
     [undefined, true, null, 'unknown']
   ] as const)(
@@ -243,6 +306,11 @@ describe('fetchControlPlaneNodes', () => {
     )
   })
 
+  it('treats a null nodes slice as an empty control-plane view', async () => {
+    const fetchImpl: FetchLike = async () => jsonResponse({ nodes: null, count: 0 })
+    expect(await fetchControlPlaneNodes('http://localhost:8080', fetchImpl)).toEqual(new Map())
+  })
+
   it('returns null on a non-200 response', async () => {
     const fetchImpl: FetchLike = async () => jsonResponse({ error: 'nope' }, 500)
     expect(await fetchControlPlaneNodes('http://localhost:8080', fetchImpl)).toBeNull()
@@ -309,6 +377,15 @@ describe('fetchExecutions', () => {
       durationMs: 45,
       terminal: true,
       errorMessage: null
+    })
+  })
+
+  it('treats a null runs slice as empty activity', async () => {
+    const fetchImpl: FetchLike = async () =>
+      jsonResponse({ runs: null, total_count: 0 })
+    await expect(fetchExecutions('http://localhost:8080', fetchImpl)).resolves.toEqual({
+      running: [],
+      recent: []
     })
   })
 

@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { setCloudConnection, setLocalPort } from './connection'
 import {
   CpApiError,
   createCpClient,
@@ -7,6 +8,7 @@ import {
   type InstallJob,
   type PackageInfo
 } from './cpClient'
+import { readInstalledAgents } from './agentfield'
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -29,6 +31,7 @@ const job = (status: InstallJob['status'], lines: string[] = []): InstallJob => 
 })
 
 describe('createCpClient', () => {
+  afterEach(() => setLocalPort(8080))
   // Contract 1: every wrapper uses the documented method, path, body, and result.
   it('wraps all management endpoints', async () => {
     const payloads: unknown[] = [
@@ -80,7 +83,7 @@ describe('createCpClient', () => {
       ['http://cp/api/ui/v1/agents/agent%2Fname/stop', 'POST'],
       ['http://cp/api/ui/v1/agents/agent%2Fname/status', 'GET'],
       ['http://cp/api/ui/v1/agents/running', 'GET'],
-      ['http://cp/api/ui/v1/agents/agent%2Fname/secrets', 'GET'],
+      ['http://cp/api/ui/v1/agents/agent%2Fname/secrets?include=env', 'GET'],
       ['http://cp/api/ui/v1/agents/agent%2Fname/secrets', 'PUT'],
       ['http://cp/api/ui/v1/agents/agent%2Fname/secrets/TOKEN?scope=node', 'DELETE'],
       ['http://cp/api/ui/v1/secrets', 'GET']
@@ -90,6 +93,34 @@ describe('createCpClient', () => {
       force: true
     })
     expect(JSON.parse(String(calls[6][1]?.body))).toEqual({ port: 9000, detach: false })
+  })
+
+  it('normalizes Go nil slices in list responses', async () => {
+    const fetchImpl = mockFetch([
+      json({ packages: null, total: 0 }),
+      json(null),
+      json({ running_agents: null, total_count: 0 }),
+      json({ secrets: null }),
+      json({ secrets: null })
+    ])
+    const client = createCpClient({ fetchImpl })
+
+    await expect(client.listPackages()).resolves.toEqual({ packages: [], total: 0 })
+    await expect(client.listInstallJobs()).resolves.toEqual([])
+    await expect(client.listRunningAgents()).resolves.toEqual({
+      running_agents: [],
+      total_count: 0
+    })
+    await expect(client.listAgentSecrets('agent')).resolves.toEqual({ secrets: [] })
+    await expect(client.listAllSecrets()).resolves.toEqual({ secrets: [] })
+  })
+
+  it('maps a null packages wire value to an empty installed-agent registry', async () => {
+    const client = createCpClient({
+      fetchImpl: mockFetch([json({ packages: null, total: 0 })])
+    })
+
+    await expect(readInstalledAgents(client)).resolves.toEqual({ exists: true, agents: [] })
   })
 
   // Contracts 2 and 3: auth is conditional and late-bound providers are re-read.
@@ -108,6 +139,15 @@ describe('createCpClient', () => {
     expect(new Headers(calls[0][1]?.headers).has('X-API-Key')).toBe(false)
     expect(calls[1][0]).toBe('http://two/api/ui/v1/agents/packages')
     expect(new Headers(calls[1][1]?.headers).get('X-API-Key')).toBe('cloud-key')
+  })
+
+  it('uses the default connection-state API key provider', async () => {
+    const fetchImpl = mockFetch([json({ packages: [], total: 0 })])
+    setCloudConnection('https://cp.example', 'state-key')
+    await createCpClient({ fetchImpl }).listPackages()
+    const [url, init] = vi.mocked(fetchImpl).mock.calls[0]
+    expect(url).toBe('https://cp.example/api/ui/v1/agents/packages')
+    expect(new Headers(init?.headers).get('X-API-Key')).toBe('state-key')
   })
 
   // Contract 4: HTTP errors retain status and parsed server details.
@@ -158,6 +198,18 @@ describe('createCpClient', () => {
     })
     expect(result.status).toBe(terminal)
     expect(lines).toEqual(['one', 'two', 'three'])
+  })
+
+  it('normalizes null job lines while watching', async () => {
+    const emitted: string[] = []
+    const client = createCpClient({
+      fetchImpl: mockFetch([json({ ...job('succeeded'), lines: null })])
+    })
+
+    const result = await client.watchInstallJob('job/1', (line) => emitted.push(line))
+
+    expect(result.lines).toEqual([])
+    expect(emitted).toEqual([])
   })
 
   it('reports when a job disappears while it is being watched', async () => {

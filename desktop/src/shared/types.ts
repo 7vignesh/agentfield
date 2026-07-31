@@ -170,6 +170,8 @@ export interface CliStatus {
  * moment Claude/Codex/anything asks.
  */
 export interface DesktopSettings {
+  /** Remote control-plane profile. The API key remains in main-process settings. */
+  cloud: { enabled: boolean; serverUrl: string; apiKey: string }
   /** Launch the app when you log in (starts hidden, in the tray). */
   openAtLogin: boolean
   /** Follow the OS appearance, or explicitly force the light/dark palette. */
@@ -215,6 +217,28 @@ export interface DesktopSettings {
   starPrompt: 'pending' | 'done'
   /** ISO timestamp until which the star prompt is snoozed (Later = +7 days). null = not snoozed. */
   starPromptSnoozedUntil: string | null
+}
+
+export interface CloudTestResult {
+  ok: boolean
+  healthy: boolean
+  authOk: boolean
+  installApi: boolean
+  version?: string
+  message: string
+}
+
+export interface RailwayStatus {
+  loggedIn: boolean
+  engineAvailable: boolean
+  hasDeployment: boolean
+  workspaces: Array<{ id: string; name: string }>
+}
+
+export interface CloudDeployResult {
+  ok: boolean
+  url?: string
+  message: string
 }
 
 /** A newer app release found on GitHub (the desktop app's update channel). */
@@ -297,6 +321,15 @@ export interface AgentFieldSnapshot {
 
 /** Surface exposed on window.agentfield by the preload script. */
 export interface AgentFieldApi {
+  cloudTest(url: string, apiKey: string): Promise<CloudTestResult>
+  /** Open the guided Railway deployment flow for a hosted control plane. */
+  cloudDeployRailway(): Promise<boolean>
+  railwayStatus(): Promise<RailwayStatus>
+  railwayLogin(): Promise<{ ok: boolean; message: string; workspaces?: RailwayStatus['workspaces'] }>
+  railwayLogout(): Promise<void>
+  cloudDeploy(workspaceId: string): Promise<CloudDeployResult>
+  cloudDestroy(): Promise<{ ok: boolean; message: string }>
+  onCloudDeployProgress(listener: (line: string) => void): () => void
   getSnapshot(): Promise<AgentFieldSnapshot>
   getCatalog(): Promise<CatalogEntry[]>
   /** Install a catalog entry by name. Resolves when `af install` exits. */
