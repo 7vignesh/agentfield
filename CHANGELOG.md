@@ -6,6 +6,239 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.118-rc.8] - 2026-07-31
+
+
+### Added
+
+- Feat(desktop): cloud mode — connect to a remote control plane or one-click deploy it to Railway (#847)
+
+* feat(desktop): cloud connection core — remote control-plane profile
+
+New connection-state module (base URL + API key, cycle-free) that
+cpClient and every raw dashboard/tray fetch now draw auth from; a cloud
+settings profile ({enabled, serverUrl, apiKey}) persisted through
+normalizeSettings; testCloudConnection (health, auth, install-API,
+version probes with per-step timeouts); URL normalization that refuses
+plaintext http to public hosts; autostart gating so cloud mode never
+probes ports, spawns a server, or auto-starts agents — one remote
+health check instead. Fixes fetchUsageStats ignoring the active base
+URL.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(desktop): Cloud tab — connect, test, and switch to a remote control plane
+
+New Cloud nav view (agentfield://cloud, Cmd/Ctrl+5): connection status,
+server URL + API key form with live test verdict (reachable / auth /
+install API / version), save-and-switch, and switch-back-to-local that
+keeps the saved profile. Deploy-on-Railway section opens the control
+plane template through a dedicated IPC channel (no generic URL opener).
+Profile is applied at startup and immediately on settings change; the
+local server start IPC refuses politely while a cloud profile is
+active, and skills sync is skipped in cloud mode.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(desktop): tolerate Go nil-slice null arrays from an empty control plane
+
+A freshly deployed control plane returns {"packages":null,"total":0}
+(Go marshals nil slices as null), which crashed the Agents view with
+'Cannot read properties of null (reading filter)' the moment a cloud
+profile pointed at an empty CP. Normalize every list-shaped response at
+the cpClient boundary (packages, install jobs, job lines, running
+agents, agent/global secrets) and guard the raw node/execution readers.
+Regression tests use the exact wire payloads; verified live against an
+empty key-enforcing CP.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* polish(desktop): Cloud panel state feedback and alignment
+
+Five explicit states with color: in-flight test (spinner, locked
+controls), green success with server version, amber degraded verdict
+for outdated control planes (connected but too old for desktop agent
+management), red failure with per-check pass/fail marks, and a green
+confirmation after save/switch with a live status dot. Alignment pass:
+stacked full-width fields, overlaid show/hide toggle, single action
+row, fixed-column verdict list, flush Railway steps. Reduced-motion
+fallback for the spinner.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(desktop): Log in with Railway — OAuth PKCE loopback + encrypted token store
+
+Authorization Code + PKCE against Railway's public OAuth endpoints
+(compatible with the railway CLI's flow), loopback callback on
+127.0.0.1 with CSRF state verification, reduced scopes (no ssh_keys),
+token exchange/refresh with rotation, and an encrypted 0600 token store
+whose codec is injected (Electron safeStorage at the integration
+layer). Client ID is env-overridable; AgentField should register its
+own OAuth client before GA.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(desktop): one-click cloud deploy engine — bundled OpenTofu + Railway module
+
+Embedded single-image module (control-plane-cloud image, generated API
+key, public domain) applied with bundled OpenTofu; -json progress
+streaming, idempotent re-apply with state kept on failure, teardown via
+destroy. The volume is attached through a direct idempotent GraphQL
+volumeCreate after apply — the provider's service.volume attribute
+creates the volume but reads it back as null, failing the apply
+(verified live; project deletion cascades the volume on destroy).
+fetch-deploy-engine.mjs vendors OpenTofu v1.10.6 + provider v0.6.2 per
+platform; builds without the vendor dir keep working via feature
+detection. Verified with a real deploy+destroy cycle on Railway.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(desktop): guided cloud flow — log in, pick workspace, deploy, connected
+
+Cloud tab gains the one-click path: Log in with Railway (browser
+consent), workspace picker, Deploy control plane with a streamed
+progress log, and automatic activation of the cloud connection profile
+from the deploy outputs — the API key never surfaces in the renderer.
+Deployed state offers re-run (reconcile) and tear down behind a typed
+confirmation that returns the app to local mode. Builds without the
+bundled engine fall back to the template link.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(desktop): skip POSIX file-mode assertion on Windows
+
+Windows reports 0o666 for every file (ACLs govern access, chmod modes
+are ignored), so the token-store 0600 check only holds on POSIX
+platforms. Failed CI's windows-latest leg.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* polish(desktop): Cloud panel subtabs — Railway and Manual connect paths
+
+Restructured from one long page into: a one-line lede, an always-
+visible status strip (current connection + switch back to local), and
+an extensible segmented tab control. The Railway tab shows one step of
+the guided flow at a time (log in, pick workspace, deploy with
+streamed progress, connected/tear-down); the Manual tab houses the
+URL + API key form with the existing test verdicts. Future provider
+tabs append to the tab array.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(desktop): dark-theme native select popups
+
+Declare color-scheme per theme at the root so native widgets (select
+dropdowns, scrollbars) render in the app's scheme, and give select
+options explicit surface/text colors — the workspace picker's popup
+was white-on-white in dark mode.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(server): propagate registry lifecycle status into package rows
+
+SyncPackagesFromRegistry hard-coded every upserted row to 'installed',
+so the API's install_status never reflected running/stopped even though
+installed.yaml carries live lifecycle state (both the CLI runner and the
+HTTP start/stop path keep it fresh, and the fsnotify watcher re-syncs on
+every change). Map the registry status into the row and require status
+equality in the already-reconciled skip so running<->stopped flips
+propagate.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(desktop): derive agent badge from install_status, not the config summary
+
+The packages API's 'status' field is a configuration summary (only ever
+configured/not_configured); lifecycle state lives in install_status.
+Mapping 'status' into deriveAgentBadge made every agent badge Unknown.
+Prefer install_status (fall back for old servers) and teach the badge
+table 'installed': it makes no affirmative lifecycle claim, so with a
+control-plane node view an active registration means running and absence
+means stopped - which also yields correct badges against older control
+planes whose install_status is stuck at 'installed'. Fixture updated to
+the real wire shape (it previously mirrored the wrong assumption, which
+is how this passed tests).
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(server): expose user_environment metadata on agent secrets listing
+
+GET /api/ui/v1/agents/:agentId/secrets?include=env now returns every
+declared user_environment variable (secret and non-secret, including
+optionals) with description, declared scope, default, and its
+requirement bucket - required, one_of (with group id/description), or
+optional. Without the query param the response shape and key set are
+unchanged, so older desktop builds that gate start on every listed key
+keep working.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(desktop): render one-of env groups and optionals from enriched secrets API
+
+Env reports built from the CP secrets endpoint flattened every key to a
+hard requirement: a require_one_of group (e.g. ANTHROPIC_API_KEY vs
+OPENROUTER_API_KEY) showed all members as red-missing Required even when
+one was stored, and optional vars were invisible. Request ?include=env
+and map the metadata back into grouped reports - group members carry
+required:true per AgentEnvVar convention with the satisfaction gate
+exempting them, one group member resolving satisfies the group, defaults
+report as 'default' rather than 'missing'. Control planes without the
+metadata fall back to the previous flat behavior.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(desktop): don't pre-block agent start on metadata-less control planes
+
+Against an older control plane the secrets listing carries no
+requirement metadata, so a require_one_of member is indistinguishable
+from a hard-required key - and the flat fallback marked every unset key
+as blocking, refusing Start over a missing LLM-provider alternative the
+agent doesn't need. Keys still render with their resolution status, but
+the fallback no longer vetoes Start; the control plane's start-time env
+resolution is the authority and its error surfaces in the UI if keys
+really are missing.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* polish(desktop): rename Cloud nav to Remote with a Beta tag
+
+User-visible labels only - the 'cloud' view id, IPC channels, and
+component names are unchanged. The nav entry gains an optional tag slot
+rendered as a small uppercase pill from existing theme tokens.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(server): count lease renewals as liveness in the status snapshot
+
+Go-SDK agents keep alive exclusively via PATCH /nodes/:id/status lease
+renewals - they never POST /heartbeat. The lease handler tagged its
+status updates StatusSourceManual, and UpdateAgentStatus only refreshes
+the snapshot's LastSeen for heartbeat sources, so the cached snapshot
+(served by GET /nodes/:id/status and fed to reconciliation events) kept
+a LastSeen frozen at registration time forever while renewals flowed.
+Deployed effect: healthy agents flap active<->offline as reconciliation
+and the HTTP health monitor fight over a node whose snapshot looks dead.
+Classify lease renewals as heartbeats. Reproduced and verified with a
+live control plane + Go SDK agent at a 5s lease interval: served
+last_seen was frozen before, advances every renewal after.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(desktop): tear-down recovers the Railway workspace id from tfstate
+
+The destroy IPC passed workspaceId '' (there is no workspace picker on
+tear-down), the provider validates workspace_id as a UUID even for
+destroy, and the run died with 'Invalid Attribute Value Match' before
+planning. The deployment's own state records the workspace the project
+was created in - prefer it, fall back to the caller's value, and refuse
+with a clear message when neither exists.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (ea1777f)
+
 ## [0.1.118-rc.7] - 2026-07-30
 
 
