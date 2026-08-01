@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.119-rc.1] - 2026-08-01
+
+
+### Fixed
+
+- Fix(release): fetch the OpenTofu deploy engine before packing desktop installers (#859)
+
+The desktop-installers job never ran fetch:deploy-engine, so
+vendor/deploy-engine was always absent in CI. electron-builder silently
+skips a missing extraResources source, so every installer shipped without
+tofu and the Remote tab fell back to "one-click deploy isn't bundled in
+this build". Fetch the engine after bundling the af CLI, and assert the
+tofu binary + provider mirror exist so a future regression fails the
+release instead of degrading the artifact.
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (61793d6)
+
 ## [0.1.118] - 2026-08-01
 
 ## [0.1.118-rc.12] - 2026-08-01
