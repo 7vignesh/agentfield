@@ -6,6 +6,49 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.118-rc.12] - 2026-08-01
+
+
+### Fixed
+
+- Fix(sdk-go): send the API key on every control-plane request (#858)
+
+* feat(sdk-go): let the DID client authenticate with an API key
+
+The DID client only spoke Bearer, so against a control plane running with
+AGENTFIELD_API_KEY every DID and VC call came back 401 and the agent came up
+with no cryptographic identity.
+
+Add WithAPIKey alongside WithToken and send X-API-Key when it is set. The two
+are independent credentials, so setting one does not imply the other.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+* fix(sdk-go): send the API key on every control-plane request
+
+An agent pointed at a control plane running with AGENTFIELD_API_KEY registered
+fine and ran its reasoner, then never reported the result: the status callback
+came back 401 on every retry, the run stayed "running" forever, and the caller
+hung until it timed out. The agent logged a warning and otherwise looked
+healthy, so the failure was close to silent.
+
+Config.APIKey reached the shared client but not the handful of paths that build
+their own *http.Request, and those cover the whole result path — execution
+status callbacks, cross-node call submit and poll, workflow events, notes and
+discovery. Each set only Authorization from Config.Token.
+
+Route them through one applyControlPlaneAuth helper that sets both headers
+independently, and give the local verifier and the DID client the API key too.
+The verifier still falls back to Token, which callers used as the key before
+APIKey existed. With neither configured nothing is sent, so the default local
+setup is untouched.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Opus 5 <noreply@anthropic.com> (5a7672f)
+
 ## [0.1.118-rc.11] - 2026-08-01
 
 
