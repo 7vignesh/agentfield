@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.120-rc.1] - 2026-08-01
+
+
+### Fixed
+
+- Fix(release): deploy-engine assert false-positives under pipefail (#860)
+
+The assert used `ls tofu tofu.exe | grep -q .`, but GitHub runs bash
+steps with -o pipefail: on macOS only `tofu` exists, ls exits nonzero
+for the missing tofu.exe arg, and pipefail surfaces that status even
+though grep matched — failing the release right after a successful
+fetch (v0.1.119: DMG/zip never built). Windows only passed via MSYS
+.exe transparency. Use plain [ -f ] tests, which have no pipeline for
+pipefail to poison.
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (991c59e)
+
 ## [0.1.119] - 2026-08-01
 
 ## [0.1.119-rc.1] - 2026-08-01
