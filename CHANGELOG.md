@@ -6,6 +6,63 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.118-rc.11] - 2026-08-01
+
+
+### Fixed
+
+- Fix(release): restore macOS signing and let containerized control planes be managed (#857)
+
+* fix(release): sign macOS builds again so notarization can succeed
+
+v0.1.118-rc.10 published without its macOS DMG or zip. The job set
+CSC_IDENTITY_AUTO_DISCOVERY=false at job level, meaning "don't guess an
+identity from the runner keychain" — but electron-builder reads that flag as
+"skip code signing", and findIdentity() returns null whenever it is false and
+CSC_NAME is unset, regardless of CSC_LINK. The app was ad-hoc signed, and
+notarizing an unsigned app comes back Invalid, so stapling failed and the job
+died after every other artifact had published.
+
+Scope the flag to the Windows step, which really is unsigned, and set it on
+macOS only when the secrets are incomplete so an unsigned build still cannot
+pick up a stray identity. The macOS guard now checks all five secrets rather
+than two, and the notarize step checks the same set — previously a missing
+CSC_KEY_PASSWORD produced an unsigned app and then hard-failed the release
+instead of degrading to a warning.
+
+Also read the notarization result properly: `notarytool submit --wait` exits 0
+even when Apple answers Invalid, which is why rc.10 got as far as `stapler` and
+reported a ticket lookup error instead of a rejection. Check the status, and on
+anything other than Accepted print Apple's own report via `notarytool log`,
+which the job never fetched.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+* fix(deploy): let containerized control planes be managed from the host
+
+A client on the host reaches a control plane in Docker over the bridge network,
+so its peer address is the gateway rather than loopback. Since the privileged
+endpoints started requiring a local caller or an API key, package install and
+the secret/env/config APIs answer 401 for anyone managing the stack from the
+host — and publishing the port to 127.0.0.1 does not help, because the
+connection still arrives from the bridge.
+
+The documented remedy is to set an API key, but compose had no
+AGENTFIELD_API_KEY passthrough at all, so `AGENTFIELD_API_KEY=... docker compose
+up` silently did nothing and the remedy was unreachable without editing the
+file. Wire it through, defaulting to empty so a plain `docker compose up` keeps
+today's behaviour.
+
+Say the same thing where the other deployments would hit it: the Docker README
+now explains why host management needs a key, and the Helm values note that a
+Service or Ingress is not a local connection either.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Opus 5 <noreply@anthropic.com> (8edc0fc)
+
 ## [0.1.118-rc.10] - 2026-08-01
 
 
