@@ -6,6 +6,151 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.118-rc.10] - 2026-08-01
+
+
+### Chores
+
+- Chore(desktop): one-click deploy tracks the latest production cloud image (#848)
+
+* chore(desktop): bump one-click deploy image to staging-0.1.118-rc.8
+
+Picks up the merged control-plane fixes (lease-renewal liveness,
+registry lifecycle sync, env metadata) for fresh Railway deploys.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* chore(desktop): one-click deploy tracks the latest production cloud image
+
+Replace the hardcoded staging pin with control-plane-cloud:latest so every
+production release automatically becomes what one-click deploys — no more
+pin-bump PRs. Railway resolves the tag once per deploy and never
+auto-repulls, so existing deployments are unaffected.
+
+Note: the :latest tag does not exist on Docker Hub until the first
+production release that includes the cloud image job publishes it.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (078ae2b)
+
+
+
+### Fixed
+
+- Fix(control-plane): require a trusted caller for package install and credential endpoints (#856)
+
+* fix(control-plane): require a trusted caller for install and credential endpoints
+
+POST /api/ui/v1/agents/packages/install clones any github.com URL it is given
+and runs that package's build and dependency steps. The global auth middleware
+treats an empty api.auth.api_key as "authentication disabled", which is the
+default, and the server binds every interface — so anything that could reach
+the port could run code as the user running the server, with no prior state.
+The secret store, agent env and agent config were reachable the same way.
+
+Guard those routes with PrivilegedAccess: with no API key configured only
+loopback callers may use them, and once a key is configured it is required from
+everyone. The ordinary local setup is unchanged, because the CLI, the desktop
+app and a same-machine browser are all loopback.
+
+The peer address comes from Request.RemoteAddr, not c.ClientIP(). This repo
+never calls SetTrustedProxies, so gin trusts every proxy and ClientIP() returns
+whatever the caller puts in X-Forwarded-For; a loopback check built on it would
+be bypassable with one header.
+
+The route-level test drives off the live route table, so a new route matching
+the privileged pattern is covered as soon as it is registered.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+* docs: explain when the control plane needs an API key
+
+The key was documented as "optional" with no indication of what it protects.
+Spell out that it is optional only for a control plane used from the machine it
+runs on, and name the three topologies that now need one: another machine on
+the network, a container reached over a bridge, and anything behind a proxy.
+
+The proxy case is a security caveat rather than a convenience one — a proxy on
+the control plane's own host makes every forwarded request look local — so it
+gets its own paragraph.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+* feat(cli): store the control-plane API key and send it automatically
+
+Enabling authentication on a control plane used to break every client, because
+the CLI could only take a key from a flag or the environment and nothing
+persisted it.
+
+Add `af auth login|status|logout`, storing one key per control-plane URL in
+~/.agentfield/credentials.json at 0600. login verifies the key against the
+server before saving and only ever prints it masked. Resolution order is
+--api-key, then AGENTFIELD_API_KEY, then the stored file, so a user who sets
+neither sees no change and no file is created.
+
+A 401 now tells the user what to run instead of reporting a bare failure.
+
+Also make the credential consistent across commands: `af ls` and `af stop` sent
+it as Authorization: Bearer while everything else used X-API-Key, and
+`af doctor` sent nothing at all. `af execution` and `af nodes` keep their
+separate --token/AGENTFIELD_TOKEN credential, which still wins, but now fall
+back to the API key.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+* feat(sdk): let agents authenticate from AGENTFIELD_API_KEY
+
+An agent started by `af run` or `af dev` inherited the server URL but never a
+credential, so against a control plane with authentication enabled every local
+agent failed to register — which made enabling a key impractical.
+
+Export the resolved key to spawned agent processes, and have both SDKs default
+their control-plane credential from AGENTFIELD_API_KEY when none is passed in
+code. The Go SDK gets its own Config.APIKey rather than reusing Token, which
+also feeds local verification and incoming-request auth and should not change
+meaning here.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+* feat(desktop): support a local API key and show why a request was refused
+
+Local mode hard-nulled the API key, so pointing the app at a local control
+plane with authentication enabled failed with no way to supply a credential.
+Add an optional key in Settings → General, kept separate from the cloud
+credential so switching modes does not clobber either.
+
+A 401 previously surfaced as "unauthorized" — the machine-readable code — which
+told the user nothing. Show the server's message and its CLI hint instead.
+
+The default local path is untouched: no key, no header, no prompt.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+* test(control-plane): cover dual-stack loopback and the Forwarded header
+
+An IPv4 client on a dual-stack host arrives as ::ffff:127.0.0.1 and is
+genuinely local, so pin that it is allowed. Pin too that the RFC 7239
+Forwarded header cannot forge a local caller, alongside the existing
+X-Forwarded-For and X-Real-IP cases.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+* test(sdk-go): cover the API key wiring in agent.New
+
+Assert what the credential is for rather than just executing the branch: the
+key reaches the control plane as X-API-Key, it defaults from AGENTFIELD_API_KEY
+so `af run` can hand it to a spawned agent, an explicit key overrides the
+environment, no key means no header, and setting it leaves Token alone.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Opus 5 <noreply@anthropic.com> (9d91dba)
+
 ## [0.1.118-rc.9] - 2026-08-01
 
 
