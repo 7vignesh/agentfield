@@ -6,6 +6,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.121-rc.1] - 2026-08-03
+
+
+### Fixed
+
+- Fix(control-plane): reconcile must honor granted node status leases (#851)
+
+The status lease handler grants nodes a 5-minute lease (DefaultLeaseTTL),
+but the status manager's reconcile sweep marked any active node inactive
+once its heartbeat was older than HeartbeatStaleThreshold (60s). Go SDK
+nodes renew their lease every 2 minutes — well inside the granted lease —
+so every idle Go node deterministically flapped offline for ~30s of each
+lease cycle (measured 33/42 polls active over 7 idle minutes; production
+deploys show the same duty cycle).
+
+StatusManager now records each granted lease expiry, and the heartbeat-
+staleness rule skips nodes whose lease (plus 30s grace) is still running.
+Dead lease-holders are still caught quickly: the HTTP health monitor's
+consecutive-failure path is unchanged and its heartbeat gate stops
+protecting a node once the heartbeat goes stale. Nodes that never receive
+a lease (Python SDK heartbeaters) keep the 60s staleness rule unchanged.
+
+With the fix, the same idle-agent poll reads 42/42 active.
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (36d10d5)
+
 ## [0.1.120] - 2026-08-01
 
 ## [0.1.120-rc.1] - 2026-08-01
