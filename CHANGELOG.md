@@ -6,6 +6,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.121-rc.2] - 2026-08-03
+
+
+### Fixed
+
+- Fix(packages): preserve file modes when installing a package (#865)
+
+copyFile created every destination with os.Create, whose mode is
+0666&^umask, and never read the source's. Any executable a node ships — a
+helper binary, a hook, a shell script — therefore arrived on disk at 0644
+and failed at spawn time with 'permission denied'. Measured against a node
+that vendors a 0755 binary: it installed non-executable on both the local
+and git paths.
+
+The two byte-identical copies of this function (the CLI installer and the
+package service) are now one shared packages.CopyFile, so the fix cannot
+drift back apart, with regression tests covering the executable bit, the
+non-executable case, reinstall over an existing file, and a full
+copyPackage walk.
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (3d7024c)
+
 ## [0.1.121-rc.1] - 2026-08-03
 
 
