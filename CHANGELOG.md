@@ -6,6 +6,76 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.121-rc.4] - 2026-08-04
+
+
+### Chores
+
+- Chore(deps-dev): bump the npm_and_yarn group across 1 directory with 2 updates (#866)
+
+Bumps the npm_and_yarn group with 2 updates in the /desktop directory: [brace-expansion](https://github.com/juliangruber/brace-expansion) and [undici](https://github.com/nodejs/undici).
+
+
+Updates `brace-expansion` from 1.1.16 to 1.1.18
+- [Release notes](https://github.com/juliangruber/brace-expansion/releases)
+- [Commits](https://github.com/juliangruber/brace-expansion/compare/v1.1.16...v1.1.18)
+
+Updates `undici` from 6.27.0 to 6.28.0
+- [Release notes](https://github.com/nodejs/undici/releases)
+- [Commits](https://github.com/nodejs/undici/compare/v6.27.0...v6.28.0)
+
+---
+updated-dependencies:
+- dependency-name: brace-expansion
+  dependency-version: 1.1.18
+  dependency-type: indirect
+  dependency-group: npm_and_yarn
+- dependency-name: undici
+  dependency-version: 6.28.0
+  dependency-type: indirect
+  dependency-group: npm_and_yarn
+...
+
+Signed-off-by: dependabot[bot] <support@github.com>
+Co-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com> (29f1cee)
+
+- Chore(deps): bump the uv group across 1 directory with 2 updates (#869)
+
+Bumps the uv group with 2 updates in the /sdk/python directory: [aiohttp](https://github.com/aio-libs/aiohttp) and [cryptography](https://github.com/pyca/cryptography).
+
+
+Updates `aiohttp` from 3.14.1 to 3.14.3
+- [Changelog](https://github.com/aio-libs/aiohttp/blob/master/CHANGES.rst)
+- [Commits](https://github.com/aio-libs/aiohttp/compare/v3.14.1...v3.14.3)
+
+Updates `cryptography` from 48.0.1 to 50.0.0
+- [Changelog](https://github.com/pyca/cryptography/blob/main/CHANGELOG.rst)
+- [Commits](https://github.com/pyca/cryptography/compare/48.0.1...50.0.0)
+
+---
+updated-dependencies:
+- dependency-name: aiohttp
+  dependency-version: 3.14.3
+  dependency-type: direct:production
+  dependency-group: uv
+- dependency-name: cryptography
+  dependency-version: 50.0.0
+  dependency-type: direct:production
+  dependency-group: uv
+...
+
+Signed-off-by: dependabot[bot] <support@github.com>
+Co-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com> (ae2c9cf)
+
+
+
+### Other
+
+- Add MiniMax voice cloning support (#870)
+
+Co-authored-by: octo-patch <266937838+octo-patch@users.noreply.github.com>
+Co-authored-by: Claude <noreply@anthropic.com> (5df1c90)
+
 ## [0.1.121-rc.3] - 2026-08-04
 
 
