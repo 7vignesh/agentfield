@@ -6,6 +6,200 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.121-rc.5] - 2026-08-04
+
+
+### Other
+
+- Offer a single SWE node, and let a manifest declare itself superseded (#864)
+
+* refactor(cli): collapse SWE catalog rows into one Go entry
+
+`af catalog` listed the SWE fleet twice — a root Python node and its Go
+counterpart — which forced a harness to pick between two rows that ship the
+same reasoners. Keep only the Go node (installed via the `//go` source
+selector) and give it the full fleet description.
+
+Tighten the pretty-output assertion to `swe-planner-go` (the old
+`swe-planner` substring matched either row) and add a guard test that pins
+the invariant: exactly one entry installs from Agent-Field/SWE-AF, its
+source ends in `//go`, and no entry is named exactly `swe-planner`, so a
+re-added root entry fails loudly instead of quietly reappearing.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* refactor(desktop): collapse SWE catalog rows into one Go entry
+
+Mirrors the `af catalog` change: the Install view listed the SWE fleet twice
+with identical copy, so the two rows were indistinguishable to a user. Keep
+only the Go node sourced from `//go`, with the same description wording the
+CLI catalog now uses.
+
+Add a test pinning the invariant — `swe-planner-go` is present, its source
+ends in `//go`, exactly one entry installs from Agent-Field/SWE-AF, and no
+entry is named exactly `swe-planner`.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* docs: point SWE examples at the go-sourced swe-planner-go node
+
+The catalog now offers the SWE fleet as a single Go node, so the docs that
+still told users to install the bare repo root and call `swe-planner` were
+advertising a node the catalog no longer lists. Update the README quickstart
+to `af install …/SWE-AF//go` plus `af run`/`af call swe-planner-go`, and
+switch the MCP example flow and the agentfield-use skill examples to the same
+node id.
+
+The `--path go` examples in installing-agent-nodes.md stay as they are — they
+document the subdirectory selector itself; only the surrounding framing is
+reworded so the Go node reads as the advertised install rather than a port of
+the root node.
+
+The skill edit is applied identically to the embedded copy under
+internal/skillkit/skill_data so the two stay byte-identical.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* refactor(desktop): keep the app's own wording for the SWE entry
+
+The catalog collapse rewrote this card's copy to match the CLI catalog's
+phrasing, which reads out of place next to the other entries in this file.
+Restore the original line — it describes the surviving Go node just as
+accurately.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(packages): record the //subdir selector in the installed source
+
+A subdirectory can reach the installer two ways: the `//subdir` selector on
+the URL, or the --path flag. The install API takes the second route — it
+splits the selector off the URL and passes it as an option — so info.URL
+arrives bare and the registry records the REPO ROOT as the source.
+
+The next update resolves that bare source and installs whatever manifest lives
+at the repo root, which is a different package than the one installed. For a
+repo shipping a Python root and a Go port side by side, updating the Go node
+silently replaces it with the Python one.
+
+Put the selector back when it came from the flag, so the recorded source
+round-trips through ParseGitURL.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+* feat(packages): let a manifest declare itself superseded by another package
+
+A node author who renames or replaces their own node has no way to carry
+existing users across: `af install <their url>` keeps installing the old
+package forever, because the manifest at that source is the only thing the
+installer looks at.
+
+Add an optional `superseded_by:` key naming an installable source. Installing
+a superseded package installs the successor instead, and replaces the old one
+when it is already present. The redirect lives in the package's own manifest,
+so the control plane needs no knowledge of any particular node — any author
+gets this, and no catalog or table here has to name them.
+
+Ordering and safety:
+  - The successor is installed FIRST; only then is the old package retired, so
+    a failed install leaves the user's existing node exactly as it was.
+  - The redirect is taken before the force check and before anything is
+    copied, so it never half-installs the package it redirects away from.
+  - Node-scoped secrets move to the successor before the old package is
+    uninstalled, which would otherwise delete that scope outright. Values
+    already set on the successor win. Global secrets are shared and untouched.
+  - Retiring the old package never fails the install: the successor is already
+    working, so a leftover is a cleanup chore, not a failure.
+  - A chain is bounded at 3 hops so two manifests pointing at each other fail
+    loudly instead of cloning forever.
+
+The user is warned before the swap, naming what will be replaced.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+* test(packages): cover the superseded_by redirect and the subdir source fix
+
+One test per behaviour, driven through the real InstallFromGit against the
+existing fake-git harness rather than against the internals:
+
+  - a superseded package installs its successor, and its own name never
+    reaches the registry
+  - an already-installed superseded package is replaced: successor present,
+    old entry and old package directory gone
+  - node-scoped secrets follow the swap, a value already set on the successor
+    wins, and global secrets are untouched
+  - with nothing to replace it is a plain install, no error
+  - two manifests pointing at each other fail with a bounded-chain error and
+    install nothing
+  - a recorded --path source round-trips through ParseGitURL back to the same
+    repo AND subdir
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+* feat(packages): let a successor replace a predecessor of the same name
+
+A node that renames itself takes the name its predecessor held, and
+`superseded_by` could not express that: the redirect installed the
+successor without carrying the user's consent to replace, so the
+successor's own force check rejected it with "already installed (use
+--force to reinstall)". The redirect has already printed an explicit
+replacement warning by then, so it now carries that consent through.
+Same name means there is nothing to retire afterwards and node-scoped
+secrets are already in the right scope, both of which the existing
+short-circuit handles.
+
+That makes the failure mode worse, though, and this fixes it too:
+copyPackage clears the destination before the replacement is copied,
+and long before its dependencies build. A replace that dies in the
+dependency step — a missing toolchain is enough — used to leave the
+user with neither the package they had nor a working new one. The
+existing directory is now set aside first and put back on any failure
+before the registry is updated, which also covers a plain
+`af install --force` on any package.
+
+Also restores the doc comment on updateRegistryWithGit, which an
+earlier commit in this branch left attached to the wrong function.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+* refactor: catalogue the SWE node as swe-planner
+
+The catalog named it swe-planner-go, after the implementation. That was
+only ever a workaround for the two SWE manifests needing distinct
+registry keys, and the node now declares itself swe-planner — a name
+that survives the implementation changing under it, and the one its
+triggers already use. Catalog `name` must equal the manifest `name`, so
+this follows rather than leads.
+
+The install command in the README drops the `//go` selector too: the
+root manifest redirects, so the bare repo URL is the whole instruction.
+
+Both catalog tests keep their guard against a second SWE row, and now
+pin the surviving row's name rather than merely asserting the Python one
+is absent — the assertion that would have caught this rename going
+half-done.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+* docs: document superseded_by
+
+The key shipped undocumented, which defeats the point of making it
+generic — a node author cannot use a manifest field they cannot find.
+Documents what it accepts, and the ordering guarantees that make a
+redirect safe to run against an installed node: resolved before
+anything is copied, successor installed first, node-scoped secrets
+carried across, retiring never fails the install, chains bounded.
+
+Also corrects the claim just above it that a root node and a `--path`
+node from one repo always coexist. They coexist when their names
+differ, and replace each other when they do not — which is exactly
+what SWE-AF, the example named there, now does.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (f4acec1)
+
 ## [0.1.121-rc.4] - 2026-08-04
 
 
