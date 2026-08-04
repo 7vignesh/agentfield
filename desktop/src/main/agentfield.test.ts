@@ -562,6 +562,17 @@ describe('install catalog', () => {
     expect(catalogEntry(CATALOG[0].name)).toEqual(CATALOG[0])
     expect(catalogEntry('definitely-not-real')).toBeUndefined()
   })
+
+  // The SWE fleet is offered as a single install, named for the product and
+  // sourced from the `//go` subdirectory. A second SWE row — or the old
+  // implementation-suffixed name creeping back in — must fail here rather than
+  // quietly reappear in the Install view.
+  it('offers the SWE fleet as one product-named entry sourced from //go', () => {
+    const sweEntries = CATALOG.filter((e) => e.source.includes('Agent-Field/SWE-AF'))
+    expect(sweEntries).toHaveLength(1)
+    expect(sweEntries[0].name).toBe('swe-planner')
+    expect(sweEntries[0].source.endsWith('//go')).toBe(true)
+  })
 })
 
 describe('installCommand', () => {
