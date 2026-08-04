@@ -6,6 +6,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.121-rc.3] - 2026-08-04
+
+
+### Fixed
+
+- Fix(storage): don't reap executions that are waiting on a child (#867)
+
+An execution's updated_at stops moving while it waits for a child to
+return, so the staleness sweep read 'blocked on a child' as 'stuck'. An
+agent doing many minutes of work inside a single request had its whole
+ancestor chain marked timed out mid-flight: the caller was told
+'execution timed out (no activity)' while the work was still running and
+went on to finish.
+
+Rows with a non-terminal child are now skipped. There is deliberately no
+recency test on the child, so the chain still drains when work genuinely
+stops — the leaf goes stale first, which makes its parent childless and
+eligible on the next sweep, and so on up. One sweep per level, and nothing
+is stranded in running.
+
+Applies to both the execution and workflow-execution sweeps, which had the
+same shape.
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (22d65d1)
+
 ## [0.1.121-rc.2] - 2026-08-03
 
 
