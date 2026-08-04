@@ -55,9 +55,11 @@ def test_cross_loop_stop_does_not_deadlock():
         assert cache._shutdown_event is None
         assert len(cache) == 0
     finally:
+        time.sleep(0.2)  # let the loop process scheduled cross-loop cancels
         loop1.call_soon_threadsafe(loop1.stop)
         t.join(timeout=2)
-        loop1.close()
+        if not loop1.is_closed():
+            loop1.close()
 
 
 def test_same_loop_start_stop_awaits_task():
@@ -125,9 +127,11 @@ def test_start_rebinds_on_new_loop_without_error():
 
         asyncio.run(restart_and_use())
     finally:
+        time.sleep(0.2)  # let the loop process scheduled cross-loop cancels
         loop1.call_soon_threadsafe(loop1.stop)
         t.join(timeout=2)
-        loop1.close()
+        if not loop1.is_closed():
+            loop1.close()
 
 
 def test_stop_without_start_is_safe():

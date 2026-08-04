@@ -47,6 +47,10 @@ def _shutdown_loop(loop, thread):
     time.sleep(0.2)
     loop.call_soon_threadsafe(loop.stop)
     thread.join(timeout=2)
+    if thread.is_alive():
+        # Thread didn't stop in time — don't close the loop while it's
+        # still running (would raise RuntimeError and obscure the real failure).
+        return
     if not loop.is_closed():
         loop.close()
 
