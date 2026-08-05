@@ -6,6 +6,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.122-rc.1] - 2026-08-05
+
+
+### Fixed
+
+- Fix(cli): stop probing for a Python venv when starting a Go node (#876)
+
+Starting a Go node printed
+
+    ⚠️  Virtual environment not found at <dir>/venv, using system Python: …
+
+because buildProcessConfig resolved a Python interpreter unconditionally and
+only afterwards checked IsGo() to override the command. The interpreter it
+found was then discarded — a Go install never builds a venv.
+
+Move the resolution into the non-Go branch, matching the shape runner.go
+already uses, so the stat probes, the LookPath scan and the VIRTUAL_ENV /
+PATH / PYTHONHOME / PYTHONPATH appends simply do not run for a Go node
+rather than running and being thrown away. The venv block itself is
+unchanged — only re-indented.
+
+Co-authored-by: Claude Opus 5 (1M context) <noreply@anthropic.com> (4af7bb9)
+
 ## [0.1.121] - 2026-08-05
 
 ## [0.1.121-rc.6] - 2026-08-04
