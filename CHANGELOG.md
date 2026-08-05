@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.124-rc.5] - 2026-08-05
+
+
+### Other
+
+- Add MiniMax text-to-speech support (#852)
+
+* feat: add MiniMax text-to-speech support
+
+* docs(sdk/python): document MiniMax audio models and cover validation branches
+
+---------
+
+Co-authored-by: octo-patch <266937838+octo-patch@users.noreply.github.com>
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com> (63f573b)
+
 ## [0.1.124-rc.4] - 2026-08-05
 
 
