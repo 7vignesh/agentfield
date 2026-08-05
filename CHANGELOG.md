@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.124-rc.10] - 2026-08-05
+
+
+### Fixed
+
+- Fix(security): bump fast-uri, postcss, and hono for Dependabot alerts (#883)
+
+Upgrade overrides/lockfiles to clear open npm advisories:
+- fast-uri 3.1.4 → 3.1.5 (GHSA-7p8r-x3mc-p8w7)
+- postcss 8.5.18 → 8.5.25 (GHSA-fxqj-rqcc-2cmp)
+- hono 4.12.32 → 4.12.34 (GHSA-8j4g-w8fx-2239)
+
+Co-authored-by: Cursor Agent <cursoragent@cursor.com>
+Co-authored-by: Santosh kumar <santoshkumarradha@users.noreply.github.com> (cd644a8)
+
 ## [0.1.124-rc.9] - 2026-08-05
 
 
