@@ -6,6 +6,79 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.124-rc.8] - 2026-08-05
+
+
+### Added
+
+- Feat(sdk/go/ai): support the Infron gateway (#874)
+
+* feat(sdk/go/ai): support the Infron gateway
+
+Infron is an OpenAI-compatible inference gateway that serves the standard
+<provider>/<model> ids, so a model moves across by prefix alone:
+infron/moonshotai/kimi-k2.6 routes the same model the bare id names.
+
+Follows the provider shape already in this package rather than inventing
+a new one:
+
+- infron_attribution.go mirrors the existing attribution helper. Infron
+  accepts the same HTTP-Referer / X-Title pair, and the attribution env
+  vars already configured for the existing gateway are honored as
+  fallbacks, so a deployment that already declares itself as
+  'AgentField AI' keeps that identity after switching gateways.
+- Config gains IsInfron(); DefaultConfig() reads INFRON_API_KEY and
+  points at https://llm.onerouter.pro/v1.
+- client.go attaches attribution on both the sync and streaming paths.
+- marshalRequest opts Infron into native usage accounting and strips the
+  routing-only 'infron/' model prefix before the request goes out
+  (stripInfronPrefix, mirroring the prefix handling on the media path).
+  The gateway serves the bare id, so leaving the prefix on returns 'No
+  available providers for model infron/...'. Only a copy of the Request
+  is rewritten; the caller's Request is untouched.
+
+One real difference is handled rather than papered over: Infron returns
+the native cost at the top level of the body and of the final stream
+chunk, rather than nested under usage. Parsed naively that leaves
+Usage.Cost nil, which the cost tracker reads as 'price unknown' -- usage
+still recorded, but with no cost and an empty cost_source instead of
+'provider'. Response/StreamChunk now carry the top-level field and
+normalizeNativeCost folds it into Usage.Cost, so every existing consumer
+keeps reading one place. An explicit usage.cost always wins.
+
+A gateway key that was already honored before Infron existed keeps
+precedence, so adding an Infron key never reroutes an existing
+deployment.
+
+llm.onerouter.pro is deliberately NOT added to vouchedRewriteDomains:
+max_tokens and max_completion_tokens behaved identically in probing and
+neither could be shown to be enforced, so the conservative legacy
+max_tokens path stays, per the reasoning already in that comment.
+
+* fix(sdk/go/ai): keep OPENAI_API_KEY precedence over INFRON_API_KEY
+
+DefaultConfig applied the Infron block unconditionally, so an environment
+with OPENAI_API_KEY set and INFRON_API_KEY added resolved to the Infron key
+and base URL. That contradicts the guarantee stated in DefaultConfig's own
+doc comment and in ENVIRONMENT_VARIABLES.md, and it matters because spawned
+agent processes inherit the parent environment -- one exported INFRON_API_KEY
+would move every Go agent's traffic and credential to a different gateway.
+
+The existing precedence test cleared OPENAI_API_KEY on its first line, so it
+only exercised the OpenRouter branch and the gap passed CI green. Adds the
+regression test for the OpenAI case plus one pinning that Infron still applies
+when it is the only gateway key set, and names the OpenRouter attribution
+fallback vars in the docs so operators can audit what feeds the gateway.
+
+---------
+
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com> (64d27aa)
+
+- Feat: add a Parallel search option to the deep research example (#863)
+
+Signed-off-by: georgeatparallel <george@parallel.ai>
+Co-authored-by: Santosh kumar <29346072+santoshkumarradha@users.noreply.github.com> (f721fca)
+
 ## [0.1.124-rc.7] - 2026-08-05
 
 
