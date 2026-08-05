@@ -6,6 +6,35 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.124-rc.2] - 2026-08-05
+
+
+### Added
+
+- Feat(typescript): add server-side memory event filters (#838)
+
+Co-authored-by: Jonesxq <239089032+Jonesxq@users.noreply.github.com> (d77f1c2)
+
+
+
+### Fixed
+
+- Fix(desktop): portal overflow menus so panel clipping can't cut them off (#881)
+
+The agents table's "..." dropdown was absolutely positioned inside
+.panel, whose overflow: hidden (rounded-corner clipping) cut the menu
+off at the card's bottom edge — on a short list the last items
+(e.g. Uninstall) were unreachable.
+
+Extract the trigger + popover into a shared MenuPopover component that
+portals the menu to <body> with fixed coordinates from the trigger's
+rect, following the .af-tooltip escape-hatch pattern. Repositions on
+scroll/resize while open. Also migrates InstallPanel's copy of the same
+markup, whose .market-card hover transform would otherwise re-anchor a
+fixed-position descendant.
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (3592a7e)
+
 ## [0.1.124-rc.1] - 2026-08-05
 
 
