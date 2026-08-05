@@ -6,6 +6,116 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.123-rc.2] - 2026-08-05
+
+
+### Fixed
+
+- Fix(install): stop a second install from seizing a running control plane (#879)
+
+* fix(install): stop a second install from seizing a running control plane
+
+The launchd labels ai.agentfield.server and ai.agentfield.tray are global per
+login session, and installDesktop reloaded both unconditionally. A second
+install therefore took the first one's control plane: bootout, rewrite, restart
+onto a different binary — while it was serving. Because the agent carries
+KeepAlive={SuccessfulExit:false}, killing the resulting process looked like a
+crash and launchd brought it straight back, pointed at the other install.
+
+Reproduced during a launch rehearsal: a sandboxed install (HOME redirected, so
+the on-disk plists were never modified) still repointed the LOADED job at its
+own binary. The user's plist said one path; the running server was another.
+
+Five changes, all in service of "an install must not silently interrupt work it
+did not start":
+
+1. Conditional takeover. The server agent is now decided by
+   launchdsvc.DecideTakeover from four observations — label loaded, /health,
+   GET /api/v1/executions/active, and who owns the existing plist. Not running
+   reloads as before; running-and-idle reloads and says so; running-with-work
+   writes the binary and plists but leaves the process alone, since the atomic
+   rename-over is already safe and the new version lands on the next restart.
+
+2. Ownership guard. A plist whose program path or home differs from what this
+   install would write belongs to somebody else, so the install refuses and
+   names both paths rather than seizing the label. An in-place upgrade is the
+   same owner and is unaffected. --take-over or
+   AGENTFIELD_INSTALL_FORCE_RESTART=1 override it.
+
+3. Idempotency. A re-run whose plist and tray binary already match on disk
+   skips the launchd round trip entirely.
+
+4. `af service status|stop|restart|uninstall`, plus internal/launchdsvc, which
+   now owns the launchctl wrappers, the labels and the plist paths so the tray
+   and the CLI drive launchd through one code path. status is read-only and
+   reports registration, health, version and in-flight count; stop exists
+   because a plain kill is indistinguishable from a crash to launchd. The
+   command is registered everywhere and reports macOS-only off darwin.
+
+5. install.sh and README say the server runs under launchd, that `af service
+   stop` (or the menu-bar icon) is how to stop it, and that --no-tray skips the
+   whole arrangement.
+
+The tray agent keeps converging unconditionally: restarting a menu-bar app
+interrupts nothing, and a stale tray on yesterday's binary is what that was for.
+
+DecideTakeover is a pure function so the policy is exhaustively table-tested —
+including the rehearsal case (different home, server running, no flags →
+Refuse) and a 128-combination sweep asserting totality — without any test
+invoking launchctl, which mutates global login-session state. The plist parser
+is pinned by round-tripping the plist serverPlist() actually generates, so a
+template change that the ownership guard could not read fails the build rather
+than turning every upgrade into a refusal.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* test(service): cover the launchd probes, stubs and command surface
+
+The patch-coverage gate failed on three files the previous commit added. All
+three were untested for the same reason: their code either runs only off macOS,
+or only against a live control plane, and neither was reachable from a test.
+
+launchctl_other.go (0.0%) is the compiled implementation everywhere except
+macOS — including on the Linux runner that measures coverage — so its stubs are
+now pinned: every mutating call reports ErrUnsupported, the queries answer
+without touching launchd, and Reload is inert.
+
+probe.go (30.0% → 95.7%) needed no seam. The probes build
+http://localhost:<port>/… and httptest listens on loopback, so passing the stub
+server's port points them straight at it. Covered: healthy, error status, and
+refused connection for /health; a counted response, a count-absent fallback to
+the run list, API-key forwarding, 401, truncated JSON and a refused connection
+for executions/active; and the sha256 helpers against real files, a missing
+path and a directory. ActiveExecutionsOn was folded into ActiveExecutions —
+one exported entry point rather than two, the second of which had no caller.
+
+service.go (29.6% → 92.9% on macOS, 97.1% on Linux) needed two structural
+changes rather than tests alone, because the parts a Linux runner can reach and
+the parts it cannot were interleaved in one file:
+
+  * The launchd mutations moved to service_darwin.go / service_other.go. A
+    darwin-only file is not compiled on Linux and so contributes no uncovered
+    lines to the gate, while the shared command wiring is now free of
+    platform-conditional branches and runs identically on both. This also
+    replaces the requireLaunchd guard: the refusal lives in the non-macOS
+    implementation, which the !darwin test drives through the real cobra RunE.
+  * agentLoadedFn indirects the one remaining launchctl call, so the status
+    assembly is exercised on every platform and no test in this package can
+    shell out to launchctl at all — not even the read-only `launchctl print`.
+
+Status is covered end to end against a stub server in both output modes,
+including the plist branch that reports which binary launchd would run, and
+printServiceStatus is walked through all six rendering states.
+
+No test invokes launchctl on any platform, and nothing reads or writes a real
+launchd job. .coverage-gate.toml is untouched.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (ef50964)
+
 ## [0.1.123-rc.1] - 2026-08-05
 
 
