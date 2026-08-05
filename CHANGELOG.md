@@ -6,6 +6,75 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.124-rc.1] - 2026-08-05
+
+
+### Fixed
+
+- Fix(install): ignore wedged runs when deciding whether the server is busy (#880)
+
+* fix(install): ignore wedged runs when deciding whether the server is busy
+
+The busy probe added in #879 counted every entry in
+GET /api/v1/executions/active as work in flight. Execution cleanup is disabled
+server-side, so a run that wedges — node still "running", nothing actually
+happening — stays in that list indefinitely. One zombie therefore made the
+probe permanently true, and a same-owner upgrade would defer its restart
+forever and never land a new binary. The guard meant to protect a busy server
+turned into a guard against ever upgrading.
+
+A live workflow touches latest_activity on every reasoner event, so freshness
+is the signal that separates the two. Observed on a real server: one run,
+root_status running, started 02:29, latest_activity 03:05 — still listed more
+than ten hours later. That run now counts as stale and is ignored; a genuinely
+active one is unaffected.
+
+The window is 30 minutes, overridable with AGENTFIELD_INSTALL_ACTIVE_WINDOW as
+a Go duration. An unparseable or non-positive value falls back to the default
+rather than failing an install.
+
+A run whose latest_activity is missing or malformed counts as BUSY. The probe
+exists to protect work in progress, so an ambiguous timestamp must never be the
+thing that licenses an interruption — the fail-safe points at not restarting.
+An older server that reports a count with no run detail to age is trusted the
+same way.
+
+DecideTakeover is untouched: the staleness rules live in the probe, and the
+policy's ActiveExecutions input now simply means "recently active". Both counts
+are returned so the messaging can be precise rather than merely smaller —
+the installer appends "(ignored 1 stale run(s) with no activity for over 30m0s)"
+and `af service status` reads "In flight: 2 workflow(s) (plus 1 stale, idle
+>30m0s)", so a number lower than the dashboard's is explained rather than
+puzzling.
+
+splitActiveRuns is split out as the pure half, so the ageing rules are tested
+without a clock or a socket, including the exact window boundary.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(install): unconfirmable liveness counts as stale, not busy
+
+The first cut treated a run with a missing or malformed latest_activity as
+busy — bad data must never license a restart. The owner reversed that call,
+and for this fleet the reversal is right: runs wedged in "running" are the
+documented failure mode here, and a run that cannot demonstrate liveness
+must not pin upgrades forever, which is the exact bug the staleness split
+exists to fix.
+
+A run with no usable activity stamp gets one fallback before the rule
+applies: its start time. A demonstrably young run — an older server that
+reports no activity stamps yet — is still protected; with no usable
+evidence at all the run is assumed stale. The count-without-run-detail
+shape from older servers follows the same rule and lands in the stale
+figure, so it stays visible in the install message and service status
+rather than silently vanishing.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (5e9fb1c)
+
 ## [0.1.123] - 2026-08-05
 
 ## [0.1.123-rc.2] - 2026-08-05
