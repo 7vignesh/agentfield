@@ -6,6 +6,323 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.122] - 2026-08-05
+
+## [0.1.122-rc.1] - 2026-08-05
+
+
+### Fixed
+
+- Fix(cli): stop probing for a Python venv when starting a Go node (#876)
+
+Starting a Go node printed
+
+    ⚠️  Virtual environment not found at <dir>/venv, using system Python: …
+
+because buildProcessConfig resolved a Python interpreter unconditionally and
+only afterwards checked IsGo() to override the command. The interpreter it
+found was then discarded — a Go install never builds a venv.
+
+Move the resolution into the non-Go branch, matching the shape runner.go
+already uses, so the stat probes, the LookPath scan and the VIRTUAL_ENV /
+PATH / PYTHONHOME / PYTHONPATH appends simply do not run for a Go node
+rather than running and being thrown away. The venv block itself is
+unchanged — only re-indented.
+
+Co-authored-by: Claude Opus 5 (1M context) <noreply@anthropic.com> (4af7bb9)
+
+## [0.1.121] - 2026-08-05
+
+## [0.1.121-rc.6] - 2026-08-04
+
+
+### Other
+
+- Provision a Go toolchain at install time, the way Python's already is (#875)
+
+* feat(packages): provision a Go toolchain, the way Python's already is
+
+`af install` provisions a Python node's prerequisite but not a Go node's.
+`resolveVenvInterpreter` walks ambient interpreter → `provisionViaUv`, which
+runs `uv python install` and *downloads* a standalone build → pyenv → only then
+an actionable error. `resolveGoToolchain` walked `firstOnPath("go")` → error.
+There was no provisioning rung at all, so installing a Go node without Go on
+PATH was a hard failure where the equivalent Python user gets an interpreter
+fetched for them.
+
+That asymmetry now decides whether the two nodes AgentField ships are
+installable at all: both the SWE fleet and pr-af are served by their Go
+implementations, so a user with no Go toolchain — which is most users, since Go
+is not preinstalled anywhere — could not install either from the desktop app.
+
+Adds the missing rung. The official index at go.dev/dl?mode=json names the
+newest stable archive for this GOOS/GOARCH along with its SHA256; that archive
+is downloaded, hashed as it streams, and **checked against the published sum
+before anything is unpacked**. Extraction is into a temp directory inside the
+toolchains dir and refuses absolute paths, `..` traversal, symlinks, hard links,
+and any entry type it does not understand — verified against the real
+go1.26.5.linux-amd64 tarball, which is 15026 regular files and 1667 directories
+and no links, so the strict policy costs nothing on the genuine artifact. Only
+after `go/bin/go` is confirmed runnable is the tree renamed into
+`<AGENTFIELD_HOME>/toolchains/<version>/`, so an interrupted download can never
+leave a half-tree that a later run mistakes for a toolchain. A lost race to a
+concurrent installer resolves to the winner's copy.
+
+`AGENTFIELD_DISABLE_GO_PROVISIONING=1` restores exactly today's behaviour for
+environments that must not fetch binaries.
+
+Also stops refusing an ambient Go that would have worked. Since 1.21 the
+toolchain downloads and switches to whatever `go.mod` asks for on its own
+(`GOTOOLCHAIN=auto`, the default) — confirmed: go1.25.4 on PATH built a module
+declaring `go 1.26.0` by fetching 1.26.0 itself. The old version gate rejected
+that, so a user on Go 1.21 with a node needing 1.23 was told to upgrade for no
+reason. `go env GOTOOLCHAIN` is now consulted, and only a genuinely incapable
+toolchain — older than 1.21, or pinned `local` — falls through to provisioning.
+
+`usableGoBinary` probes that the binary *runs* rather than that it exists. A
+cached toolchain whose `go` lost its execute bit would otherwise be handed back
+from the cache forever and fail inside the build with a raw permission error —
+the same failure mode SWE-AF's engine check was hardened against. It
+deliberately does not require the version to parse, since this file treats an
+unparseable version as "unknown, don't gate" everywhere else.
+
+Verified end to end with no `go` on PATH at all: installing the pr-af repo
+followed its `superseded_by` redirect, provisioned Go 1.26.5, built the node,
+and registered it as `pr-af`; the second install reused the cache in 2s.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+* fix(packages): extract the toolchain through os.Root, and test the entry policy
+
+CodeQL flagged both extraction loops as `go/zipslip` (2 high). The lexical
+`safeArchivePath` check was sound — Clean, reject a `..` prefix, then confirm
+the joined path is still under the root — but "the scanner does not recognise my
+sanitizer" is a weak answer on a security finding, and a lexical check is only
+as good as its own reasoning about paths.
+
+Extraction now writes through `os.Root` (Go 1.24+; this module is on 1.25).
+Every create and mkdir resolves inside the destination at the syscall level and
+refuses to escape it — `..`, absolute paths, and symlinked parents alike. That
+is a structural guarantee rather than a string comparison, so it holds even
+where a lexical argument would have to be re-checked. The name check stays as a
+cheap first gate that produces a legible error, but it is no longer what makes
+this safe.
+
+Verified on the genuine artifact, not just fixtures: the real
+go1.26.5.linux-amd64 tarball still extracts completely through os.Root — all
+15026 files — and the provisioned toolchain runs.
+
+The entry policy had no tests at all, which is how it should not have been
+shipped: refusing symlinks and hard links is a security control, and the
+happy-path tests never touched it because a well-formed Go archive contains
+nothing unusual. Now pinned directly — symlinks (escaping and innocuous), hard
+links, character devices and FIFOs are each refused by name and leave nothing
+behind; directories and regular files extract with their mode preserved, which
+matters because a `go/bin/go` without its execute bit is not a toolchain.
+
+Also covers the degradation paths that decide whether a user gets guidance or a
+plumbing error: an unresolvable AgentField home, a `toolchains` path that is not
+a directory, an unreachable archive host, a non-200 or malformed index, and an
+index with no build for this platform — each declines quietly so the caller
+keeps its actionable "install Go" message.
+
+Patch coverage 65% → 80.6%.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+* test(packages): cover the provisioning paths that decide what the user is told
+
+Raises patch coverage 78% → 82%, but the point is which paths: every one of
+these changes what a user sees when something goes wrong.
+
+- A download that fails its checksum, or dies partway through, must not degrade
+  into "no `go` toolchain was found on PATH". That message tells someone their
+  machine is missing Go when the truth is that what we fetched could not be
+  trusted — so integrity failures stay loud and a truncated transfer leaves
+  nothing cached for the next run to trip over.
+- An unwritable cache directory declines quietly instead, because there the
+  install-Go guidance is exactly the right advice.
+
+Also makes the fake toolchain in the fixtures report `go1.99.0` rather than
+`go9.9.9`. `installedGoVersion` only recognises `go1`/`go2` prefixes, so the old
+value silently exercised the unparseable-version branch on every provisioning
+test and never the normal one.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+* feat(packages): say the toolchain is downloading before it downloads
+
+The provisioning notice printed only on success, so the ~64MB transfer happened
+in silence behind an install spinner that cannot tick during it. On a slow link
+that is a minute of nothing, shown to precisely the people this feature exists
+for: users with no Go, who have no reason to expect installing an agent to fetch
+a compiler, and who reasonably read a still spinner as a hang.
+
+Now announced up front with the version and size, from the `size` the download
+index already publishes alongside the checksum.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Opus 5 (1M context) <noreply@anthropic.com> (91fd73f)
+
+- Consolidate the SWE and PR-AF nodes in the app, and make installs superseded-aware (#873)
+
+* fix(packages): an install job reports the package the installer actually installed
+
+`Manager.run` inferred the installed package by diffing the registry's names
+before and after: whichever name is new must be the one this job installed.
+That inference breaks on exactly the case `superseded_by` was added for.
+
+A successor may declare its predecessor's name — an in-place rename, which is
+what both Agent-Field/SWE-AF#122 and Agent-Field/pr-af#64 use, and what keeps a
+node id, its triggers, and its node-scoped secrets intact across the swap. The
+set of installed names is then identical before and after, so the diff finds
+nothing and the job reports an empty package name. AgentField Desktop streams
+that job's output, so the user watched a successful install end in
+"install completed: " with the name missing.
+
+When the successor's name *does* differ, the diff happened to work, but only by
+luck: it returns the first registry name that is new, so any unrelated entry
+appearing during the install is misattributed to this job.
+
+The installer already knows the answer — `GitInstaller` tracks it in
+`installedName` and propagates it through a redirect. Export it, thread it out
+through the package service as `InstallPackageWithResult`, and have the job
+prefer it, keeping the before/after diff as the fallback for installers that
+cannot report a name. Node-dependency discovery used the same diff idiom and is
+switched to the authoritative name too, which also stops it from walking the
+dependencies of a package some other caller installed concurrently.
+
+Updates take the authoritative name as well. `StartUpdate` pre-seeds the job
+with the name being updated, so previously the installer's answer was
+discarded — and an update whose recorded source redirects to a differently
+named successor would then try to restart the package the redirect had just
+uninstalled. It now reports and restarts the node that exists.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+* feat(desktop): name the node an install actually landed on
+
+Every install result in the app was phrased from the request: the catalog row's
+name, or the URL that was pasted. A `superseded_by:` redirect makes that a
+guess — the manifest at the source hands the install off to a successor, which
+may register under its own name.
+
+Now that the control plane reports what it installed, repeat that instead:
+
+  - a pasted repo says "pr-af installed" rather than "Installed from
+    https://github.com/Agent-Field/pr-af", which is the more useful half of the
+    sentence and the only one that tells you what to run next;
+  - a catalog install names the successor if it ever disagrees with the row —
+    the two agree for every entry today (that is the invariant catalog.ts
+    documents), so a disagreement is drift worth seeing rather than hiding
+    behind the row's own label;
+  - an update that followed a rename reads "<old> replaced by <new>" instead of
+    claiming it updated a node that no longer exists.
+
+Each falls back to the previous wording when the control plane names nothing,
+so an older control plane behaves exactly as it does today.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+* refactor(catalog): one PR-AF row, and install both consolidated nodes by repo
+
+The catalog offered PR-AF twice — a Python row and a Go row shipping the same
+reasoners under a name the user had to know to type. The two were
+indistinguishable in the Install view except by the `-go` suffix, which is an
+implementation detail leaking into a product list. Agent-Field/pr-af#64 collapses
+them the way Agent-Field/SWE-AF#122 collapsed the SWE fleet: the root manifest
+redirects to `//go`, and the Go node takes the product's name. So this is one
+`pr-af` row, language go.
+
+Both consolidated rows now install from the bare repo URL rather than naming
+`//go` directly. Selecting the subdirectory would install the same node, but it
+skips the redirect — and the redirect is the part that carries an existing
+install across: it puts the successor in place first, migrates node-scoped
+secrets, and only then retires the predecessor. Someone who already has the
+Python node gets migrated by pressing Update; someone naming `//go` would only
+collide with it. Naming the repo and letting the manifest decide is also simply
+what a user can be told to type.
+
+That changes the rule both catalogs are written against, so both header comments
+now say the new one: an entry's `name` must equal the name the package ends up
+REGISTERED under once the install settles, which under a redirect is not the
+`name:` in the manifest at the source, and may live in a subdirectory the
+catalog never mentions.
+
+sec-af and cloudsecurity-af are untouched — neither ships a second
+implementation, so neither has anything to collapse.
+
+The SWE guard test generalizes to cover both repos: exactly one row per repo,
+named for the product, sourced at the bare URL, language go, and the retired
+implementation-suffixed name absent from the whole catalog — so a re-added row
+fails here instead of quietly reappearing.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+* docs(skills): the PR review node is pr-af, not pr-af-go
+
+The agentfield-use skill is what a harness reads to learn how to call the nodes
+on this machine, and skillkit installs it into Claude Code, Codex, Cursor and
+the rest — so its examples are the ids an agent will actually try. Its
+`executions/active` sample still showed a run targeting `pr-af-go`, a name that
+stops existing once Agent-Field/pr-af#64 lands.
+
+Applied identically to the embedded copy under skillkit/skill_data so the two
+stay byte-identical.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+* test(packages): pin that the production installer can report what it installed
+
+The job reaches the authoritative name through a type assertion, and a failed
+assertion is silent — it falls back to inferring the name from a registry diff,
+which is exactly the path that returns nothing for an in-place `superseded_by`
+replacement. Every other test in this file uses a stub that satisfies the
+interface by construction, so none of them would notice a production wiring
+change (a decorator, a swapped implementation) that quietly reverted the fix.
+
+This one asserts against the service the server actually constructs.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+* fix(packages): a node-dependency cycle must terminate
+
+Switching dependency discovery from a registry snapshot to the authoritative
+installed name dropped the only thing that stopped a cycle.
+
+The snapshot version terminated by accident but reliably: the recursive call
+received a snapshot that already contained the package just reinstalled, so the
+second lap skipped it. Recursing on a single name removed that, and the
+remaining guard — `depName != "" && isPackageInstalled(depName)` — cannot
+substitute. It only knows a dependency's name for `af://registry/…` refs, and a
+forced install reinstalls whatever is already there. Every update is forced
+(`StartUpdate` → `startJob(JobUpdate, …, true)`), so two packages declaring each
+other by bare git URL or local path recursed until the process died — with the
+package-job manager's `active` latch held, blocking every later install.
+
+Tracks the packages this install pass has walked instead, which does not depend
+on ref form, on Force, or on registry state.
+
+The accompanying suite pins the seam's behaviour end to end through the real git
+installer rather than a stub: a redirect reports the successor — including when
+the successor takes the predecessor's own name, the case a registry diff cannot
+see and the reason this seam exists — a failed install reports no name at each
+stage it can fail, an uninstallable dependency does not fail its parent, and a
+cycle terminates. That last one fails in 30s against this fix reverted.
+
+`manager_test.go` covers the other side: an installer that cannot report a name
+still installs and falls back to the registry diff, so the old path stays intact
+for anything that does not implement the newer seam.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Opus 5 (1M context) <noreply@anthropic.com> (f70d5da)
+
 ## [0.1.121-rc.5] - 2026-08-04
 
 
