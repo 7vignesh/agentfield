@@ -6,6 +6,74 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.125] - 2026-08-05
+
+
+### Other
+
+- Make agent installs work on cloud deployments, and make re-run deploy a real upgrade path (#887)
+
+* fix(desktop): make re-run deploy a safe, actual upgrade path for remote deployments
+
+Remote deployments were frozen on whatever image existed the day they were
+created: the Terraform module pinned source_image to the floating :latest,
+Railway resolves a floating tag once and never re-pulls, and an unchanged
+string is a no-op apply — so 'Re-run deploy' could never upgrade anything.
+That is how a deployment from July kept failing SWE-AF installs with the
+pre-superseded_by 'requires Python >=3.12' error long after the redirect
+shipped in v0.1.121.
+
+- source_image is now a variable, set at deploy time by resolveCloudImage(),
+  which asks Docker Hub which release tag shares latest's digest and pins
+  that concrete tag. A new release changes the string, the diff redeploys
+  the service (the provider calls redeployAllInstances on update), and
+  re-running deploy becomes the upgrade path.
+- A failed lookup returns null and falls back to the pin already recorded in
+  state — never rewriting a working deployment's image to :latest, which
+  would itself have forced a pointless redeploy. Fresh deployments fall back
+  to :latest. The lookup is bounded by AbortSignal.timeout(5000).
+- The service resource now ignores changes to its volume attribute. The
+  /data volume is created out-of-band, the provider refreshes it into state,
+  and a re-apply planned the undeclared attribute back to null — which the
+  provider's update handler turns into volumeDelete, silently destroying the
+  control plane's databases, secrets, and installed agents on every re-run.
+  With re-runs promoted to the routine upgrade action, that pre-existing
+  hazard had to close.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(deploy): ship uv in the cloud image so requires-python nodes install in cloud deployments
+
+The cloud image's python3 is Debian bookworm's 3.11.2 and nothing could
+provision anything newer, so installing an agent node with requires-python
+>=3.12 on a cloud deployment failed with 'no compatible interpreter is
+available' — the installer's provisionViaUv path already handles this, but
+only when uv is on PATH.
+
+Interpreters uv downloads go under /data (UV_PYTHON_INSTALL_DIR): venvs on
+the volume symlink back to the interpreter, and one left in $HOME would
+vanish with the container on the next deploy, breaking every venv built
+from it. The smoke test asserts both the binary and the install dir.
+
+Validated by building the image and installing a fixture node declaring
+requires-python ">=3.12": before, it reproduces the exact production
+failure; after, uv provisions CPython 3.12 under /data/uv/python and the
+install succeeds.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(ci): actually gate required-checks on the cloud image job
+
+The summary job lists control-plane-cloud-image in needs but only ever
+inspected control-plane-image.result, so with if: always() a cloud image
+build or smoke-test failure could not fail the aggregate check.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (75fa55e)
+
 ## [0.1.124] - 2026-08-05
 
 ## [0.1.124-rc.11] - 2026-08-05
