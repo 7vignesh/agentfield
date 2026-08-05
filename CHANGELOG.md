@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.124-rc.3] - 2026-08-05
+
+
+### Testing
+
+- Test(typescript): expand multimodal coverage (#846)
+
+* test(typescript): expand multimodal coverage
+
+* test(typescript): cover Audio.fromUrl default format
+
+---------
+
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com> (2175312)
+
 ## [0.1.124-rc.2] - 2026-08-05
 
 
