@@ -6,6 +6,40 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.124-rc.9] - 2026-08-05
+
+
+### Fixed
+
+- Fix(sdk/go/ai): two follow-ups to the Infron gateway integration (#874) (#884)
+
+* fix(sdk/go/ai): never fabricate zero-token usage from a top-level cost
+
+normalizeNativeCost synthesized an empty Usage{} when a body carried a
+top-level cost without a usage block. On the streaming path every consumer
+accumulates usage last-non-nil-wins, so a cost-only chunk arriving after
+the real usage chunk replaced genuine token counts with zeros — recorded
+downstream as input=0/output=0 with cost_source "provider", an
+authoritative-looking row that has lost its tokens. Fold the cost only
+into a usage block the provider actually sent.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(sdk/go/ai): don't inherit attribution values past their opt-out
+
+Infron attribution fell back to the OpenRouter-scoped site URL and app
+name but never consulted AGENTFIELD_OPENROUTER_ATTRIBUTION, so values a
+deployment had explicitly suppressed — often internal hostnames or
+product names — were sent to a different vendor on the first Infron
+call. Inherit the values only while OpenRouter attribution is enabled;
+the Infron defaults apply otherwise.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (a2dee0b)
+
 ## [0.1.124-rc.8] - 2026-08-05
 
 
