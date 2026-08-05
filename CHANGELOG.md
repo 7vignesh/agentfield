@@ -6,6 +6,57 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.124-rc.11] - 2026-08-05
+
+
+### Fixed
+
+- Fix(sdk/python): forward v1 video optional fields regressed by #854 (#886)
+
+PR #854 promoted content/ratio/callback_url/aigc_watermark to named
+parameters of MiniMaxProvider.generate_video and rejected all four for
+non-H3 models. Before that, the last three fell through **kwargs into
+the v1 request body and were forwarded verbatim — callback_url and
+aigc_watermark are documented v1 fields — so existing Hailuo callers
+now raise ValueError.
+
+Forward ratio/callback_url/aigc_watermark verbatim on the v1 path
+again, matching v0.1.123 byte-for-byte. Keep the guard for content
+only: structured content is a v2 request shape that never worked
+against v1, so the client-side error stays.
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (de30ec6)
+
+- Fix(ci): build UI images on bookworm and pin desktop security overrides (#868)
+
+* fix(security): close open npm Dependabot vulnerability alerts
+
+Bump transitive overrides across web client, desktop, TypeScript SDK,
+and mastra-bench lockfiles:
+
+- brace-expansion → 1.1.18 / 2.1.4 / 5.0.9 (CVE-2026-14257, CVE-2026-69152)
+- postcss → 8.5.25 (GHSA-fxqj-rqcc-2cmp incomplete sourceMappingURL fix)
+- fast-uri → 3.1.5 (backslash authority host confusion)
+- undici → 6.28.0 (cookie injection, retry desync, CRLF blob type)
+
+Closes Dependabot alerts #355, #357, #363, #365, #366, #370, #371, #372,
+
+Co-authored-by: Santosh kumar <santoshkumarradha@users.noreply.github.com>
+
+* fix(ci): build web UI on bookworm to avoid lightningcss musl flake
+
+npm ci on alpine intermittently omits lightningcss-linux-*-musl when the
+lockfile lacks libc metadata, breaking vite build in functional-test
+image builds. Use glibc Node images for the UI builder stages instead.
+
+Co-authored-by: Santosh kumar <santoshkumarradha@users.noreply.github.com>
+
+---------
+
+Co-authored-by: Cursor Agent <cursoragent@cursor.com>
+Co-authored-by: Santosh kumar <santoshkumarradha@users.noreply.github.com>
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com> (5c7e773)
+
 ## [0.1.124-rc.10] - 2026-08-05
 
 
