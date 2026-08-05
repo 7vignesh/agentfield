@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.124-rc.4] - 2026-08-05
+
+
+### Other
+
+- Add MiniMax H3 video v2 support (#854)
+
+* feat: add MiniMax H3 video v2 support
+
+* fix(sdk/python): correct MiniMax H3 resolutions, pricing, and task enums
+
+---------
+
+Co-authored-by: octo-patch <266937838+octo-patch@users.noreply.github.com>
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com> (fd15a67)
+
 ## [0.1.124-rc.3] - 2026-08-05
 
 
