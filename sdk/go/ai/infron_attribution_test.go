@@ -154,6 +154,7 @@ func TestInfronAttributionFallsBackToExistingVars(t *testing.T) {
 	t.Setenv("AGENTFIELD_INFRON_ATTRIBUTION", "")
 	t.Setenv("AGENTFIELD_INFRON_SITE_URL", "")
 	t.Setenv("AGENTFIELD_INFRON_APP_NAME", "")
+	t.Setenv("AGENTFIELD_OPENROUTER_ATTRIBUTION", "")
 	t.Setenv("AGENTFIELD_OPENROUTER_SITE_URL", "https://legacy.example")
 	t.Setenv("AGENTFIELD_OPENROUTER_APP_NAME", "Legacy App")
 
@@ -162,6 +163,27 @@ func TestInfronAttributionFallsBackToExistingVars(t *testing.T) {
 
 	assert.Equal(t, "https://legacy.example", header.Get("HTTP-Referer"))
 	assert.Equal(t, "Legacy App", header.Get("X-Title"))
+}
+
+// The opt-out travels with the inherited values: attribution a deployment
+// suppressed for OpenRouter — often because the site URL names an internal
+// host — must not be sent to a different vendor either. The Infron defaults
+// are used instead.
+func TestInfronAttributionDoesNotInheritOptedOutValues(t *testing.T) {
+	t.Setenv("AGENTFIELD_INFRON_ATTRIBUTION", "")
+	t.Setenv("AGENTFIELD_INFRON_SITE_URL", "")
+	t.Setenv("AGENTFIELD_INFRON_APP_NAME", "")
+	t.Setenv("AGENTFIELD_OPENROUTER_ATTRIBUTION", "false")
+	t.Setenv("AGENTFIELD_OPENROUTER_SITE_URL", "https://internal-tools.corp.example")
+	t.Setenv("AGENTFIELD_OPENROUTER_APP_NAME", "Internal Risk Engine")
+	t.Setenv("OR_SITE_URL", "")
+	t.Setenv("OR_APP_NAME", "")
+
+	header := http.Header{}
+	applyInfronAttributionHeaders(header, "", "")
+
+	assert.Equal(t, defaultInfronSiteURL, header.Get("HTTP-Referer"))
+	assert.Equal(t, defaultInfronAppName, header.Get("X-Title"))
 }
 
 func TestApplyInfronAttributionHeadersDisabled(t *testing.T) {
@@ -290,14 +312,15 @@ func TestResponseNormalizesTopLevelCost(t *testing.T) {
 	assert.InDelta(t, 0.000002, *resp.Usage.Cost, 1e-12)
 }
 
-func TestResponseNormalizeCreatesUsageWhenAbsent(t *testing.T) {
+// A body carrying cost but no usage block must not have one fabricated for it:
+// a synthesized Usage carries zero token counts that downstream consumers read
+// as authoritative.
+func TestResponseNormalizeDoesNotFabricateUsage(t *testing.T) {
 	var resp Response
 	require.NoError(t, json.Unmarshal([]byte(`{"cost": 0.5}`), &resp))
 	resp.normalizeNativeCost()
 
-	require.NotNil(t, resp.Usage)
-	require.NotNil(t, resp.Usage.Cost)
-	assert.InDelta(t, 0.5, *resp.Usage.Cost, 1e-12)
+	assert.Nil(t, resp.Usage)
 }
 
 // An explicit usage.cost is authoritative and must not be overwritten.
@@ -346,4 +369,32 @@ func TestStreamChunkNormalizeNoopWithoutCost(t *testing.T) {
 	chunk.normalizeNativeCost()
 
 	assert.Nil(t, chunk.Usage)
+}
+
+// A cost-only chunk must not grow a fabricated zero-token Usage. Stream
+// consumers accumulate last-usage-wins, so a synthesized Usage arriving after
+// the real usage chunk would erase the real token counts.
+func TestStreamChunkCostOnlyDoesNotFabricateUsage(t *testing.T) {
+	var usageChunk StreamChunk
+	require.NoError(t, json.Unmarshal(
+		[]byte(`{"usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}}`),
+		&usageChunk))
+	usageChunk.normalizeNativeCost()
+
+	var costChunk StreamChunk
+	require.NoError(t, json.Unmarshal([]byte(`{"cost": 0.00042, "choices": []}`), &costChunk))
+	costChunk.normalizeNativeCost()
+
+	assert.Nil(t, costChunk.Usage, "cost-only chunk must not synthesize usage")
+
+	// The last-usage-wins accumulation every stream consumer performs.
+	var accumulated *Usage
+	for _, chunk := range []StreamChunk{usageChunk, costChunk} {
+		if chunk.Usage != nil {
+			accumulated = chunk.Usage
+		}
+	}
+	require.NotNil(t, accumulated)
+	assert.Equal(t, 10, accumulated.PromptTokens)
+	assert.Equal(t, 5, accumulated.CompletionTokens)
 }
