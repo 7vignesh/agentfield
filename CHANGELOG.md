@@ -6,6 +6,71 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.124-rc.7] - 2026-08-05
+
+
+### Chores
+
+- Chore(deps-dev): bump electron (#882)
+
+Bumps the npm_and_yarn group with 1 update in the /desktop directory: [electron](https://github.com/electron/electron).
+
+
+Updates `electron` from 39.8.5 to 39.8.10
+- [Release notes](https://github.com/electron/electron/releases)
+- [Commits](https://github.com/electron/electron/compare/v39.8.5...v39.8.10)
+
+---
+updated-dependencies:
+- dependency-name: electron
+  dependency-version: 39.8.10
+  dependency-type: direct:development
+  dependency-group: npm_and_yarn
+...
+
+Signed-off-by: dependabot[bot] <support@github.com>
+Co-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com> (ed127c1)
+
+- Chore(readme): sync utm-links.csv and guard it in CI (#878)
+
+The CSV is the manifest of every UTM-tagged link in the README, but nothing
+enforced that it stayed in sync, so it drifted across successive README
+rewrites: 8 tracked links had no row, and one row pointed at a link deleted
+in 859174f4.
+
+Sync:
+- add the 8 missing rows (harness-banner, prompt-to-production, full-features,
+  explore-features, see-all-examples, architecture, community-docs,
+  community-examples)
+- drop the stale blog-iam row
+- normalize the one www.agentfield.ai link to the apex domain, so analytics
+  don't fragment by host
+- fix the missing space in the cloudsecurity row name
+
+Guard:
+- scripts/check-utm-links.py fails on a README link with no row, a stale row,
+  a target that disagrees with the README, an untagged agentfield.ai link, or
+  a www. host. Reports the exact row to paste. Stdlib only.
+- .github/workflows/readme-links.yml runs it on PRs touching README.md,
+  the manifest, or the checker.
+
+Co-authored-by: OG <oktaygoktas@users.noreply.github.com>
+Co-authored-by: Claude Opus 5 (1M context) <noreply@anthropic.com> (b97e7d2)
+
+
+
+### Fixed
+
+- Fix(security): bump brace-expansion for CVE-2026-14257 (#855)
+
+Override brace-expansion@1 to 1.1.18 and brace-expansion@2 to 2.1.4
+in the web client to close Dependabot alerts for the unbounded
+expansion length DoS (OOM crash) in both package-lock.json and
+pnpm-lock.yaml.
+
+Co-authored-by: Cursor Agent <cursoragent@cursor.com>
+Co-authored-by: Santosh kumar <santoshkumarradha@users.noreply.github.com> (fa3d376)
+
 ## [0.1.124-rc.6] - 2026-08-05
 
 
