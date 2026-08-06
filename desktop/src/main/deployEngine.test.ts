@@ -40,6 +40,8 @@ function outputs(overrides: Record<string, unknown> = {}) {
     project_id: { value: 'project' },
     environment_id: { value: 'environment' },
     service_id: { value: 'service' },
+    furrow_domain: { value: 'furrow.proxy.test' },
+    furrow_port: { value: 12345 },
     ...overrides
   })
 }
@@ -64,6 +66,43 @@ function deployedState(apiKey = 'prior-key', subdomain = 'agentfield-dead', sour
 }
 
 describe('deployment module and execution', () => {
+  // Workspace sync is an extra. A control plane that is up and reachable is a
+  // successful deploy whether or not a furrow address came back with it, so a
+  // missing proxy output must never turn into a failed deployment.
+  it('still succeeds when the deployment reports no furrow address', async () => {
+    const plain = workspace()
+    const fake = harness([
+      {},
+      { stdout: '{"type":"apply_complete","@message":"Apply complete"}\n' },
+      { stdout: outputs({ furrow_domain: undefined, furrow_port: undefined }) }
+    ])
+    const result = await runDeploy(plain.opts, fake.deps)
+    expect(result).toMatchObject({ ok: true, url: 'https://cp.test', apiKey: 'key' })
+    expect((result as { furrowAddress?: string }).furrowAddress).toBeUndefined()
+  })
+
+  // The Railway provider hands back the proxy domain as an absolute FQDN on
+  // create ("altaria.proxy.rlwy.net.") but without the trailing dot on refresh.
+  // Interpolating it raw made the very next deploy rewrite FURROW_PUBLIC_ADDR,
+  // and a changed service variable restarts the control plane — so a re-deploy
+  // that should have been a no-op bounced the server. Normalising both places
+  // the domain is read keeps the published address identical across applies.
+  it('normalises the proxy domain so redeploys do not rewrite the address', async () => {
+    const plain = workspace()
+    const fake = harness([
+      {},
+      { stdout: '{"type":"apply_complete","@message":"Apply complete"}\n' },
+      { stdout: outputs({}) }
+    ])
+    await runDeploy(plain.opts, fake.deps)
+    const module = readFileSync(join(plain.opts.workspaceDir, 'main.tf'), 'utf8')
+    for (const line of module.split('\n')) {
+      if (!line.includes('railway_tcp_proxy.furrow.domain')) continue
+      expect(line).toContain('trimsuffix(railway_tcp_proxy.furrow.domain, ".")')
+    }
+    expect(module).toMatch(/railway_tcp_proxy\.furrow\.domain/)
+  })
+
   it('writes the module and a CLI mirror config only when a mirror exists', async () => {
     const withMirror = workspace(true)
     const fake = harness([
@@ -72,7 +111,7 @@ describe('deployment module and execution', () => {
       { stdout: outputs() }
     ])
     const result = await runDeploy(withMirror.opts, fake.deps)
-    expect(result).toMatchObject({ ok: true, url: 'https://cp.test', apiKey: 'key' })
+    expect(result).toMatchObject({ ok: true, url: 'https://cp.test', apiKey: 'key', furrowAddress: 'furrow.proxy.test:12345' })
     const module = readFileSync(join(withMirror.opts.workspaceDir, 'main.tf'), 'utf8')
     expect(module).toContain('resource "railway_project" "cp"')
     expect(module).toContain('workspace_id = var.workspace_id')
@@ -83,6 +122,8 @@ describe('deployment module and execution', () => {
     // falls back to the floating tag.
     expect(fake.calls[0].env.TF_VAR_image).toBe('agentfield/control-plane-cloud:latest')
     expect(module).not.toMatch(/\bvolume\s*=/)
+    expect(module).toMatch(/resource "railway_tcp_proxy" "furrow" \{[\s\S]*?application_port = 8802[\s\S]*?environment_id\s*= railway_project\.cp\.default_environment\.id[\s\S]*?service_id\s*= railway_service\.cp\.id[\s\S]*?\}/)
+    expect(module).toMatch(/resource "railway_variable" "furrow_public_addr" \{[\s\S]*?name\s*= "FURROW_PUBLIC_ADDR"[\s\S]*?value\s*= "\$\{trimsuffix\(railway_tcp_proxy\.furrow\.domain, "\."\)\}:\$\{railway_tcp_proxy\.furrow\.proxy_port\}"[\s\S]*?\}/)
     expect(module).toContain('output "project_id"')
     expect(module).toContain('output "environment_id"')
     expect(module).toContain('output "service_id"')
@@ -157,7 +198,11 @@ describe('deployment module and execution', () => {
     const fake = harness([{}, {}, { stdout: outputs() }], fetchImpl)
 
     expect(await runDeploy({ ...fixture.opts, onLine: (line) => lines.push(line) }, fake.deps)).toEqual({
-      ok: true, url: 'https://cp.test', apiKey: 'key', message: 'AgentField deployed to Railway.'
+      ok: true,
+      url: 'https://cp.test',
+      apiKey: 'key',
+      furrowAddress: 'furrow.proxy.test:12345',
+      message: 'AgentField deployed to Railway.'
     })
     expect(fetchImpl).toHaveBeenCalledTimes(3)
     expect(fake.calls[0].env.TF_VAR_image).toBe('agentfield/control-plane-cloud:v0.1.124')
