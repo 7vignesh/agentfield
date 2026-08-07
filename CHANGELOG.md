@@ -6,6 +6,37 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.126-rc.2] - 2026-08-07
+
+
+### Chores
+
+- Chore(deps): bump js-yaml (#892)
+
+Bumps the npm_and_yarn group with 1 update in the /desktop directory: [js-yaml](https://github.com/nodeca/js-yaml).
+
+
+Updates `js-yaml` from 4.3.0 to 4.3.1
+- [Changelog](https://github.com/nodeca/js-yaml/blob/4.3.1/CHANGELOG.md)
+- [Commits](https://github.com/nodeca/js-yaml/compare/4.3.0...4.3.1)
+
+---
+updated-dependencies:
+- dependency-name: js-yaml
+  dependency-version: 4.3.1
+  dependency-type: direct:production
+  dependency-group: npm_and_yarn
+...
+
+Signed-off-by: dependabot[bot] <support@github.com>
+Co-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com> (da525c3)
+
+
+
+### Other
+
+- Fix macOS Go scaffold happy path (#894) (902737b)
+
 ## [0.1.126-rc.1] - 2026-08-07
 
 
