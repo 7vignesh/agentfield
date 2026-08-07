@@ -6,6 +6,224 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.126-rc.1] - 2026-08-07
+
+
+### Added
+
+- Feat: make the workspace handle reachable — provision furrow, fix the skill, expose the address (#890)
+
+* feat(af): provision the pinned furrow client from its release
+
+The workspace handle needs furrow on the CALLER's machine, and furrow had no
+distribution channel, so the only instruction anyone could give was "build it
+from Rust source" — which meant the feature was unreachable in practice.
+
+Download the pinned release asset into ~/.agentfield/bin, verified against the
+release's SHA256SUMS and written atomically. Unsupported platforms (Windows has
+no asset; furrow uses std::os::unix unconditionally) are a clean no-op, and the
+installed version is recorded beside the binary so bumping the pin actually
+upgrades machines that already have it.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(af): install furrow with the skill that uses it, and expose af furrow ensure
+
+Provisioning belongs in the install path rather than in documentation that each
+caller re-implements. Ensure furrow when the agentfield-use skill installs —
+best-effort, so a failed download never fails the install — and add an explicit
+`af furrow ensure` for repair, which does surface the error since someone
+asking for it by name is owed the failure.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(skills): sync the embedded agentfield-use mirror
+
+The workspace-handle section added in #885 landed in skills/ only, leaving the
+embedded copy the control plane actually serves 41 lines behind. Three skillkit
+tests have been failing on main since that merge.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(control-plane): expose furrow address in health
+
+The desktop's workspace-sync probe (PR #885) reads furrow_public_addr from
+the health response body, but nothing emitted the field, so the probe could
+never report availability. Emit it from the shared health handler when the
+FURROW_PUBLIC_ADDR env var is set; omit the key entirely when it is not.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* docs(skill): resolve furrow from where AgentField installs it
+
+furrow has no release channel today, so "use it only if furrow is on PATH"
+silently disabled the workspace handle for every caller. Point the lookup at
+`~/.agentfield/bin` (where provisioning puts it) and at a node's own vendored
+copy, and keep the silent-skip when neither exists. Provisioning itself belongs
+in the install path, not in this document.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(furrow): serialize concurrent installs and stop timing out slow downloads
+
+Two processes running Ensure at once (a desktop skill sync racing a manual
+af skill install, possibly different af versions) could interleave the
+binary rename and marker write, leaving an old binary marked as current —
+permanently skipping the repair. An flock around the whole check-download-
+install sequence serializes them, and the loser re-checks under the lock
+so it skips instead of re-downloading.
+
+The 15s client timeout bounded the entire request including the ~7.5MB
+body, failing spuriously below ~500KB/s. Phase timeouts (dial 10s, TLS
+10s, response header 30s) with a 3-minute ceiling replace it.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(skill): make the furrow resolver POSIX sh, honor AGENTFIELD_HOME, bump to 0.5.0
+
+The resolver snippet used {bin,go/bin} brace expansion, which dash leaves
+literal — any agent running it under sh would never find furrow-dial inside
+installed packages. Spell the two package dirs out. It also hardcoded
+~/.agentfield while provisioning honors AGENTFIELD_HOME, so a custom home
+could install furrow somewhere the skill never looks.
+
+The catalog says to bump Version on every content change; the furrow
+sections (here and #885) shipped on 0.4.0, leaving reconcilers no signal.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(deploy): opt the cloud image out of furrow client provisioning
+
+The furrow client is a laptop-side tool — cloud agents get furrowd vendored
+by their own packages, and nothing in the container clones workspaces. Any
+skill install run in the container would otherwise pull ~7.5MB from GitHub
+onto the volume for no consumer.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(desktop): tell users when a cloud upgrade exists, and stop skipping skill sync in cloud mode
+
+Re-run deploy has been a safe upgrade path since source_image pinning, but
+nothing said an upgrade existed — users had to know the button doubles as
+one. The panel now compares the deployed pin from Terraform state against
+the release tag Docker Hub resolves for :latest, shows 'Control plane
+vX -> vY available', and relabels the action 'Upgrade & redeploy' while
+one is pending. The connection test also gets a Workspace sync row, kept
+neutral when the server predates the health field it reads.
+
+syncSkills was skipped whenever a cloud profile was active — a guard the
+cloud-mode PR added wholesale. Skills (and the furrow client their install
+provisions) belong to local coding agents regardless of where the control
+plane runs; a cloud-connected laptop is exactly the machine that needs the
+workspace client.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* chore(furrow): check or explicitly discard every error lint sees
+
+golangci-lint is advisory in CI, but the new provisioning code should not
+ship with its own errcheck noise.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* test(furrow): cover the provisioning error paths the patch gate flagged
+
+CI's 80% patch-coverage gate measured the furrow provisioning code at 74%:
+every error branch (unresolvable home, bin-dir collision, lock acquisition,
+missing or malformed checksums, failed binary download) and the
+runtime-platform defaulting path were untested. Exercise each of them, plus
+'af furrow ensure' end to end through cobra in both its silent-success and
+surfaced-failure shapes. The lock test lives behind a unix build tag because
+only the flock implementation can fail; the flock() syscall error itself
+stays uncovered rather than contorting the code to inject it.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (1fc0eb7)
+
+- Feat(desktop): open the workspace-sync port when we deploy a control plane (#885)
+
+* feat(desktop): open the workspace-sync port when we deploy a control plane
+
+SWE-AF can now mirror a build's workspace so the coding agent that started a run
+can read the files while the run is still going. Reaching it needs one exposed
+TCP port and an address the node can advertise, and neither exists on a
+deployment we provision today.
+
+The module now declares a railway_tcp_proxy for port 8802 and sets
+FURROW_PUBLIC_ADDR from its computed domain and port, so a managed deploy comes
+with workspace sync already on and nothing for the user to configure or even
+know about. This stays declarative rather than another GraphQL side-channel like
+the volume: the pinned provider (0.6.2) has railway_tcp_proxy, so it composes
+with destroy, and Railway's public GraphQL exposes no TCP-proxy create mutation
+anyway. A port-targeted HTTP domain is not an option either — railway_service_domain
+in this provider version has no port attribute.
+
+Workspace sync is an extra and is treated like one. Its outputs are read
+separately from the ones a deploy needs, so a control plane that is up and
+reachable is a success whether or not a furrow address came back with it —
+without that split, a Railway that declined the proxy would have reported the
+whole deployment as failed. testCloudConnection reports reachability as a
+status, never a health failure, so a user who brought their own control plane
+sees no change beyond one passive line.
+
+The agentfield-use skill now tells a coding agent what to do with a
+workspace_handle when it finds one in a result, and says nothing when there
+isn't one. That includes the one carve-out from "never POST to an agent's own
+port": the handle's endpoint is a furrow transport authorized by a per-run
+token, not the agent's HTTP surface.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(desktop): probe the workspace-sync port without disabling TLS validation
+
+The reachability probe opened a TLS connection with certificate validation
+turned off, because furrowd's default certificate is self-signed. CodeQL
+flagged it as a high-severity finding and was right to: the flag is a real
+security control, and "it is only a probe" is not a reason to switch one off.
+
+A plain TCP connect answers the same question — is anything listening on the
+advertised workspace-sync port — without weakening anything. Confidentiality
+here comes from furrow's payload encryption and the per-run token, neither of
+which this probe is involved in.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* docs(skill): pair with the handle's path verbatim
+
+The handle now carries the run's own store directory rather than the root above
+it, so appending the run id to it points at nothing. Says so explicitly, since
+the wrong version fails with a message about a missing HEAD that gives no hint
+the path was the problem.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(desktop): keep the workspace-sync address stable across deploys
+
+The Railway provider returns the TCP proxy domain as an absolute FQDN when it
+creates the proxy — "altaria.proxy.rlwy.net." — and without the trailing dot
+when it later reads it back. Interpolating that value raw meant a fresh deploy
+wrote FURROW_PUBLIC_ADDR with the dot and the next deploy rewrote it without,
+and because a changed service variable restarts the service, a redeploy that
+should have been a no-op bounced the control plane.
+
+Normalising both places the domain is read makes the published address identical
+on create and on refresh, so the follow-up plan is empty.
+
+Found by applying the module against a real Railway account rather than reading
+the provider schema: create returned the dotted form, the next plan showed the
+variable changing underneath it. Both address forms do reach furrowd — a client
+on this machine cloned a workspace out of a Railway container over each — so
+this is about deploy idempotence, not reachability.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (1515101)
+
 ## [0.1.125] - 2026-08-05
 
 
