@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.127-rc.1] - 2026-08-07
+
+
+### Other
+
+- Add request logging middleware for #557
+
+Replace gin's verbose stdout [GIN] logger with a structured zerolog
+middleware (middleware.GinLogger) that emits one DEBUG-level line per
+request, keeping default info output free of duplicated, overly verbose
+request logs. (0a0eaa4)
+
 ## [0.1.126] - 2026-08-07
 
 ## [0.1.126-rc.2] - 2026-08-07
