@@ -240,12 +240,13 @@ class ConnectionManager:
             logger.info("ConnectionManager closed")
 
     def _close_cross_loop(self, owning_loop: asyncio.AbstractEventLoop) -> None:
-        """Tear down from a foreign loop without awaiting loop-bound primitives.
+        """Tear down from a foreign loop by scheduling real teardown on the owner.
 
-        Marks the manager closed, cancels the background tasks on their owning
-        loop, and schedules the aiohttp session/connector close on that loop
-        too. Nothing is awaited here — a cross-loop await is exactly what
-        deadlocks (#623).
+        Marks the manager closed (preventing new requests), cancels background
+        tasks on their owning loop, and schedules the session/connector close
+        plus state mutation on the owning loop under its async lock. This
+        serializes the transition so an in-flight get_session() on the owning
+        loop never sees half-torn-down state (#623).
         """
         if self._closed:
             return
@@ -256,23 +257,35 @@ class ConnectionManager:
         self._health_check_task = None
         self._cleanup_task = None
 
-        session = self._session
-        connector = self._connector
-        self._session = None
-        self._connector = None
-        self._loop = None
-
-        # Schedule the async close of the session/connector on the loop that
-        # owns them. aiohttp resources must be closed on their own loop.
+        # Schedule the real teardown (lock acquisition + session/connector
+        # close + state nulling) on the owning loop. We don't mutate
+        # _session/_connector here — that happens inside the scheduled
+        # coroutine under the lock so concurrent get_session() callers
+        # on the owning loop see a consistent state.
         if owning_loop.is_closed():
+            # Loop already gone — resources will be GC'd; just drop refs.
+            self._session = None
+            self._connector = None
+            self._loop = None
+            logger.info("ConnectionManager closed (owning loop already closed)")
             return
 
-        async def _close_resources() -> None:
+        # Capture refs for the closure; clear self._loop so the manager
+        # appears stopped from the outside immediately.
+        mgr_self = self
+        self._loop = None
+
+        async def _close_resources_on_owner() -> None:
             try:
-                if session is not None:
-                    await session.close()
-                if connector is not None:
-                    await connector.close()
+                async with mgr_self._lock:
+                    session = mgr_self._session
+                    connector = mgr_self._connector
+                    mgr_self._session = None
+                    mgr_self._connector = None
+                    if session is not None:
+                        await session.close()
+                    if connector is not None:
+                        await connector.close()
             except Exception:
                 logger.debug(
                     "Cross-loop session/connector close failed", exc_info=True
@@ -280,10 +293,12 @@ class ConnectionManager:
 
         try:
             owning_loop.call_soon_threadsafe(
-                lambda: owning_loop.create_task(_close_resources())
+                lambda: owning_loop.create_task(_close_resources_on_owner())
             )
         except Exception:
-            # Owning loop may be mid-teardown; the resources will be GC'd.
+            # Owning loop may be mid-teardown; drop refs so GC can collect.
+            self._session = None
+            self._connector = None
             logger.debug("Could not schedule cross-loop close", exc_info=True)
 
         logger.info("ConnectionManager closed (cross-loop)")

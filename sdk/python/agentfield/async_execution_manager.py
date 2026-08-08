@@ -368,14 +368,29 @@ class AsyncExecutionManager:
         # Cancel all active executions. The _execution_lock is an asyncio.Lock
         # bound to the owning loop — taking it from a foreign loop would raise
         # "got Future attached to a different loop". On a cross-loop stop we
-        # skip this section: the executions will be cancelled when the owning
-        # loop tears down or the manager is restarted (#623 review feedback).
+        # schedule the cancellation on the owning loop so executions are
+        # actually terminated rather than left dangling.
         if owning_loop is current_loop:
             async with self._execution_lock:
                 for execution in self._executions.values():
                     if execution.is_active:
                         execution.cancel("Manager shutdown")
                         self._release_capacity_for_execution(execution)
+        elif owning_loop is not None and not owning_loop.is_closed():
+            # Schedule execution cancellation on the owning loop so it runs
+            # under the correct lock. Fire-and-forget — we can't await it.
+            def _cancel_on_owner():
+                async def _do_cancel():
+                    async with self._execution_lock:
+                        for execution in self._executions.values():
+                            if execution.is_active:
+                                execution.cancel("Manager shutdown (cross-loop)")
+                                self._release_capacity_for_execution(execution)
+                owning_loop.create_task(_do_cancel())
+            try:
+                owning_loop.call_soon_threadsafe(_cancel_on_owner)
+            except Exception:
+                logger.debug("Could not schedule cross-loop execution cancel", exc_info=True)
 
         # Stop components
         await self.connection_manager.close()
