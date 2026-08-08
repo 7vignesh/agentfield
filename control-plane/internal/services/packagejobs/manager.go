@@ -70,6 +70,10 @@ type installer interface {
 	GetPackageInfo(name string) (*domain.InstalledPackage, error)
 }
 
+type resultInstaller interface {
+	InstallPackageWithResult(source string, options domain.InstallOptions) (string, error)
+}
+
 type Manager struct {
 	mu             sync.RWMutex
 	installer      installer
@@ -78,6 +82,27 @@ type Manager struct {
 	jobs           map[string]*Job
 	order          []string
 	active         bool
+	// onRegistryChange runs synchronously after a mutation lands in
+	// installed.yaml so API reads are consistent with API writes (the
+	// fsnotify watcher also syncs, but asynchronously).
+	onRegistryChange func()
+}
+
+// SetOnRegistryChange registers a hook invoked after every successful
+// install/update/uninstall. The server wires this to the registry→DB sync.
+func (m *Manager) SetOnRegistryChange(fn func()) {
+	m.mu.Lock()
+	m.onRegistryChange = fn
+	m.mu.Unlock()
+}
+
+func (m *Manager) notifyRegistryChange() {
+	m.mu.RLock()
+	fn := m.onRegistryChange
+	m.mu.RUnlock()
+	if fn != nil {
+		fn()
+	}
 }
 
 // NewManager constructs the package service exactly as the CLI container does.
@@ -197,7 +222,22 @@ func (m *Manager) run(jobID string, force bool) {
 	before := m.installedNames()
 	if err == nil {
 		installSource, options := splitSubdir(source, force)
-		err = m.installer.InstallPackage(installSource, options)
+		if reporting, ok := m.installer.(resultInstaller); ok {
+			var installedName string
+			installedName, err = reporting.InstallPackageWithResult(installSource, options)
+			// The installer is authoritative about what it installed, and an
+			// update is where that matters most: a `superseded_by` redirect in
+			// the recorded source can retire the package being updated and put
+			// a differently-named successor in its place. Following the
+			// installer here means the job reports — and restarts — the node
+			// that now exists, rather than the name that went in and no longer
+			// resolves.
+			if err == nil && installedName != "" {
+				packageName = installedName
+			}
+		} else {
+			err = m.installer.InstallPackage(installSource, options)
+		}
 	}
 	if err == nil && packageName == "" {
 		packageName = m.discoverPackageName(before)
@@ -208,6 +248,7 @@ func (m *Manager) run(jobID string, force bool) {
 	}
 	if err == nil {
 		m.appendLine(jobID, fmt.Sprintf("install completed: %s", packageName))
+		m.notifyRegistryChange()
 	}
 	m.finish(jobID, packageName, err)
 }
@@ -260,6 +301,19 @@ func (m *Manager) isRunning(name string) (bool, error) {
 }
 
 func (m *Manager) Uninstall(packageName string) error {
+	m.mu.Lock()
+	if m.active {
+		m.mu.Unlock()
+		return ErrBusy
+	}
+	m.active = true
+	m.mu.Unlock()
+	defer func() {
+		m.mu.Lock()
+		m.active = false
+		m.mu.Unlock()
+	}()
+
 	if _, err := m.installer.GetPackageInfo(packageName); err != nil {
 		return ErrNotFound
 	}
@@ -275,6 +329,7 @@ func (m *Manager) Uninstall(packageName string) error {
 	if err := m.installer.UninstallPackage(packageName); err != nil {
 		return err
 	}
+	m.notifyRegistryChange()
 	return nil
 }
 
