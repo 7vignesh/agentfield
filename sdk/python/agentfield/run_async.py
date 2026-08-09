@@ -101,6 +101,14 @@ def fire_and_forget(coro: Coroutine[Any, Any, Any]) -> None:
         loop = asyncio.get_running_loop()
         loop.create_task(coro)
     except RuntimeError:
-        # No running loop — run in a background thread.
-        thread = threading.Thread(target=asyncio.run, args=(coro,), daemon=True)
+        # No running loop — run in a background thread with exception
+        # handling so failures are logged cleanly rather than surfacing
+        # as noisy unhandled-thread-exception tracebacks.
+        def _worker() -> None:
+            try:
+                asyncio.run(coro)
+            except Exception:
+                logger.debug("fire_and_forget background task failed", exc_info=True)
+
+        thread = threading.Thread(target=_worker, daemon=True)
         thread.start()
