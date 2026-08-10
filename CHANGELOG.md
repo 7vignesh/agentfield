@@ -6,6 +6,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.127-rc.6] - 2026-08-10
+
+
+### Fixed
+
+- Fix(harness): bound CLI output capture at 16MB per stream (#903)
+
+run_cli buffered a child's entire stdout/stderr unbounded — chunk list,
+joined str, and (in providers) the parsed JSONL event list all live at
+once, so a runaway stream is held in memory several times over, and N
+concurrent harness calls multiply that. This was one contributing layer in
+pr-af's OOM crash (Agent-Field/pr-af#65): 16 concurrent opencode calls,
+each buffering everything, on one container.
+
+Capture is now bounded per stream via AGENTFIELD_HARNESS_MAX_OUTPUT_BYTES
+(default 16MB, <=0 disables). Real provider streams are completion-boundary
+events (hundreds of KB), so normal runs stay byte-identical. On overflow
+the head (session/model info, first error) and the tail (final result +
+cumulative usage events) are kept around a truncation marker line; the
+marker and any partial seam line parse as invalid JSON, which parse_jsonl
+already skips, so extract_final_text and token extraction keep working on a
+truncated stream.
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (33979de)
+
 ## [0.1.127-rc.5] - 2026-08-10
 
 
