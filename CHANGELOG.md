@@ -6,6 +6,131 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.127-rc.4] - 2026-08-10
+
+
+### Chores
+
+- Chore(deps): bump js-yaml to 4.3.1 (#898) (5e0da59)
+
+
+
+### Fixed
+
+- Fix(sdk/python): resolve ResultCache cross-loop deadlock (#623) (#799)
+
+* fix(sdk/python): resolve ResultCache cross-loop deadlock (#623)
+
+ResultCache mixed a threading.RLock (for its data) with loop-bound
+asyncio primitives (asyncio.Event for shutdown, asyncio.Task for the
+cleanup loop). When start() and stop() ran on different event loops —
+which happens when the AgentFieldClient's sync and async execution
+paths are mixed (#620) — stop() would raise 'got Future attached to a
+different loop' and could wedge the process waiting on a task it can
+never await.
+
+Fix: make the cache lifecycle loop-aware.
+- Record the event loop the cleanup task/shutdown event are bound to.
+- start() is now idempotent on the same loop and rebinds cleanly when
+  called on a new loop, discarding the stale task via
+  call_soon_threadsafe(task.cancel) on its owning loop — never a
+  cross-loop await.
+- stop() only awaits the cleanup task when on its owning loop; from a
+  different loop it cancels without awaiting. The cache is always
+  cleared regardless (that path only needs the thread lock).
+- Shrink the cleanup loop's critical section so stats logging no longer
+  runs while holding the lock, reducing contention with sync callers.
+
+Adds tests/test_result_cache_deadlock.py covering cross-loop stop,
+idempotent/rebinding start, concurrent sync access during cleanup, and
+the disabled-cache no-op path. result_cache.py coverage: 88% -> 95%.
+
+* fix(test): remove unused pytest import (ruff F401)
+
+* fix(sdk/python): extend loop-aware teardown to manager + connection pool (#623)
+
+Addresses review feedback on #799: the same foreign-loop
+'task.cancel(); await task' hazard that affected ResultCache also lived
+in AsyncExecutionManager.stop() and http_connection_manager
+ConnectionManager.close(). Since client.aclose() flows through
+manager.stop() -> connection_manager.close(), the end-to-end sync/async
+mixing case (#620/#623) still raised 'got Future attached to a different
+loop' one level up, before result_cache.stop() was reached.
+
+Changes:
+- New agentfield/async_lifecycle.py with shared loop-aware teardown
+  helpers: current_running_loop(), cancel_task_cross_loop(),
+  cancel_and_await_if_same_loop(). Single source of truth for the safe
+  pattern.
+- ResultCache refactored to use the shared helpers (behaviour unchanged).
+- AsyncExecutionManager records its owning loop at start(); stop() only
+  awaits background tasks / sets the shutdown Event on that loop, and
+  cancels cross-loop without awaiting otherwise.
+- http_connection_manager ConnectionManager records its owning loop at
+  start(); close() takes the async lock + awaits the session only on the
+  owning loop, and on a foreign loop schedules session/connector close on
+  the owning loop via call_soon_threadsafe without awaiting.
+
+Tests: new tests/test_async_lifecycle_deadlock.py covers cross-loop
+teardown of both components (3 of its 4 checks fail pre-fix on the
+merge-base). Full result_cache + manager + connection suite green
+(110 passed); result_cache.py coverage 98%.
+
+* fix(sdk/python): address review feedback — stop/start race + cross-loop lock (#623)
+
+1. ResultCache.stop(): compare-before-clear so a concurrent start()
+   that installs fresh references between the await and the cleanup
+   doesn't get its new task orphaned.
+
+2. AsyncExecutionManager.stop(): skip the _execution_lock section on
+   cross-loop stop — the lock is bound to the owning loop, taking it
+   from a foreign loop raises the same 'got Future attached to a
+   different loop' error one line below the fix.
+
+* fix(test): prevent flaky pending-task warnings in cross-loop tests
+
+Add time.sleep(0.2) before stopping loops to let scheduled cross-loop
+cancels process, and guard loop.close() against still-running threads.
+Addresses Copilot review feedback on test reliability.
+
+* fix(sdk/python): schedule real teardown on owning loop for cross-loop stop (#623)
+
+Addresses @santoshkumarradha's review: cross-loop stop/close now
+schedules the actual teardown work on the owning loop rather than
+skipping it or mutating state unserialized.
+
+AsyncExecutionManager.stop(): on cross-loop, schedules execution
+cancellation (under _execution_lock) on the owning loop via
+call_soon_threadsafe so active executions are actually terminated
+rather than left dangling.
+
+ConnectionManager._close_cross_loop(): moves _session/_connector
+mutation inside a coroutine scheduled on the owning loop under the
+async lock, so an in-flight get_session() on the owning loop never
+sees half-torn-down state. Only _closed is set immediately (to gate
+new requests); the rest is serialized on the correct loop. (29498e4)
+
+
+
+### Testing
+
+- Test: add coverage for GinLogger middleware (#557) (#895)
+
+* test: add coverage for GinLogger middleware (#557)
+
+* test(middleware): cover aborted-status and error-field logging in GinLogger (#557)
+
+Ports the non-200 case from #896 so that draft can close in favor of this
+one, and additionally asserts the error field is populated via c.Error(),
+a path neither draft covered. Also restores the missing trailing newline.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com>
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (c3fd728)
+
 ## [0.1.127-rc.3] - 2026-08-10
 
 
