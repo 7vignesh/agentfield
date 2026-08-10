@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.127-rc.7] - 2026-08-10
+
+
+### Chores
+
+- Chore(deps): bump nanoid to 3.3.17 (#900)
+
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com> (5902d71)
+
 ## [0.1.127-rc.6] - 2026-08-10
 
 
