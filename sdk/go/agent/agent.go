@@ -24,6 +24,7 @@ import (
 	"github.com/Agent-Field/agentfield/sdk/go/client"
 	"github.com/Agent-Field/agentfield/sdk/go/did"
 	"github.com/Agent-Field/agentfield/sdk/go/harness"
+	"github.com/Agent-Field/agentfield/sdk/go/triggers"
 	"github.com/Agent-Field/agentfield/sdk/go/types"
 )
 
@@ -153,6 +154,12 @@ type Reasoner struct {
 	// nil/empty = inherit default ("warn"), "true" = explicitly opt in, "false" = explicitly refuse.
 	// Auto-set to "true" if any Triggers are declared.
 	AcceptsWebhook *string
+
+	// triggerBindings stores the full triggers.Binding values (including the
+	// non-serialisable Transform function) for dispatch-time use. Populated
+	// by withTriggersBinding / OnEvent / OnSchedule. Not exported because
+	// the wire payload uses Triggers (types.TriggerBinding) above.
+	triggerBindings []triggers.Binding
 }
 
 // EventTrigger describes an external event source binding for a reasoner.
@@ -280,6 +287,8 @@ func triggerToBinding(t any) (types.TriggerBinding, bool) {
 			"timezone":   tz,
 		})
 		return types.TriggerBinding{Source: "cron", Config: cfg}, true
+	case triggers.Binding:
+		return bindingToWire(v), true
 	default:
 		return types.TriggerBinding{}, false
 	}
