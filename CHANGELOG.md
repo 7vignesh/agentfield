@@ -6,6 +6,49 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.127-rc.5] - 2026-08-10
+
+
+### Fixed
+
+- Fix(sdk/python): run destructor cleanup synchronously when no loop is running (#620 follow-up) (#902)
+
+* fix(sdk/python): retain and observe fire_and_forget tasks on a running loop
+
+fire_and_forget()'s running-loop branch did a bare loop.create_task(coro).
+asyncio only keeps a weak reference to a task, so the task could be
+garbage-collected mid-flight and silently never complete, and because
+nobody ever retrieved the result, a failing task printed the noisy
+"Task exception was never retrieved" traceback on collection — exactly
+what the thread branch of #899 fixed for the no-loop case.
+
+Hold the task in a module-level set and attach a done callback that drops
+the reference and logs any failure at debug level, matching the thread
+branch's message.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(sdk/python): run destructor cleanup synchronously when no loop is running
+
+#899 replaced the bare asyncio.run() in Agent.__del__ with
+fire_and_forget(). That fixed the running-loop case (previously it raised
+RuntimeError and the exception was swallowed), but regressed the common
+destructor case: with no running loop, fire_and_forget() hands the
+coroutine to a daemon thread, and at interpreter exit that thread is
+killed before it does any work. AsyncExecutionManager.stop(), the
+background-task gather and the notification dispatcher shutdown were all
+silently dropped.
+
+Dispatch on loop presence instead: asyncio.run() when there is no running
+loop so the cleanup actually completes before __del__ returns, and
+fire_and_forget() only when a loop is already running.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (2523fae)
+
 ## [0.1.127-rc.4] - 2026-08-10
 
 
