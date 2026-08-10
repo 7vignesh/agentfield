@@ -6,6 +6,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.127-rc.2] - 2026-08-10
+
+
+### Fixed
+
+- Fix(control-plane): make the execution cleanup initial delay testable (#897)
+
+cleanupLoop waited on a hardcoded 30 second timer before its first
+cleanup pass. That branch could not be reached by any test without
+sleeping for 30 seconds, so the first-pass path was never exercised.
+
+Move the value to a named constant and hold it in an unexported field
+that the constructor always populates. Production timing is unchanged:
+NewExecutionCleanupService is the only construction site, so every
+instance still gets 30 seconds, and no config or exported API surface
+is added. Tests in this package can shorten the field directly.
+
+A guard test asserts the default is still 30 seconds, so the value is
+now pinned by an assertion rather than left as an implicit assumption.
+
+Adds loop coverage for the initial-cleanup branch, the ticker branch,
+and the RetryStaleWorkflowExecutions error path. Each loop test
+neutralises the other timer so it can only pass for the right reason.
+
+execution_cleanup.go now reports 100% across all seven functions
+(cleanupLoop 84.6% -> 100%, performCleanup 97.9% -> 100%). (53bad8c)
+
 ## [0.1.127-rc.1] - 2026-08-07
 
 
