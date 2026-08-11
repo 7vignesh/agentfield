@@ -21,6 +21,11 @@ import (
 //
 // Available as the *triggers.Context parameter in the handler (nil when the
 // reasoner was invoked directly via app.Call instead of by an inbound event).
+//
+// EXPERIMENTAL: This type is exported for forward compatibility. Runtime
+// construction and injection into handler context is planned for #514
+// (dispatch envelope unwrap + Context injection). Do not depend on this
+// being populated until that issue ships.
 type Context struct {
 	// AgentField trigger row ID; stable, equals the public URL slug.
 	TriggerID string
@@ -63,11 +68,11 @@ type EventOpts struct {
 
 // ScheduleOpts configures a cron schedule trigger binding.
 type ScheduleOpts struct {
-	// 5-field cron expression (minute hour dom month dow).
-	Expression string
+	// Cron is the 5-field cron expression (minute hour dom month dow).
+	Cron string
 	// IANA timezone name. Defaults to "UTC".
 	Timezone string
-	// Optional source-specific config.
+	// Optional source-specific config (merged with expression/timezone).
 	Config json.RawMessage
 }
 
@@ -114,19 +119,28 @@ func Event(opts EventOpts) Binding {
 }
 
 // Schedule creates a schedule (cron) trigger binding from the given options.
+// The expression and timezone are always merged into Config so the control
+// plane sees them regardless of whether custom Config was provided.
 func Schedule(opts ScheduleOpts) Binding {
 	tz := opts.Timezone
 	if tz == "" {
 		tz = "UTC"
 	}
-	cfg := opts.Config
-	if cfg == nil {
-		raw, _ := json.Marshal(map[string]any{
-			"expression": opts.Expression,
-			"timezone":   tz,
-		})
-		cfg = raw
+	// Always include expression and timezone in config. If the caller
+	// provided custom Config, merge expression/timezone into it.
+	base := map[string]any{
+		"expression": opts.Cron,
+		"timezone":   tz,
 	}
+	if opts.Config != nil {
+		var custom map[string]any
+		if err := json.Unmarshal(opts.Config, &custom); err == nil {
+			for k, v := range custom {
+				base[k] = v
+			}
+		}
+	}
+	cfg, _ := json.Marshal(base)
 	return Binding{
 		Source: "cron",
 		Config: cfg,

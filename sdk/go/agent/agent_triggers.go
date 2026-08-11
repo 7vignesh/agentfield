@@ -1,9 +1,6 @@
 package agent
 
 import (
-	"fmt"
-	"runtime"
-
 	"github.com/Agent-Field/agentfield/sdk/go/triggers"
 	"github.com/Agent-Field/agentfield/sdk/go/types"
 )
@@ -30,7 +27,7 @@ func (a *Agent) OnEvent(opts triggers.EventOpts, name string, handler HandlerFun
 //
 // The expression follows the standard 5-field cron format (minute hour dom month dow).
 func (a *Agent) OnSchedule(expression string, name string, handler HandlerFunc, opts ...OnScheduleOption) {
-	schedOpts := triggers.ScheduleOpts{Expression: expression}
+	schedOpts := triggers.ScheduleOpts{Cron: expression}
 	for _, o := range opts {
 		o(&schedOpts)
 	}
@@ -75,13 +72,3 @@ func bindingToWire(b triggers.Binding) types.TriggerBinding {
 	}
 }
 
-// captureCallerOrigin is an alternative to the existing captureCodeOrigin that
-// allows specifying the exact skip depth. Useful for sugar methods that wrap
-// other registration calls.
-func captureCallerOrigin(skip int) string {
-	_, file, line, ok := runtime.Caller(skip)
-	if !ok {
-		return ""
-	}
-	return fmt.Sprintf("%s:%d", file, line)
-}

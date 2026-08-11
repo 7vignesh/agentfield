@@ -97,7 +97,7 @@ func TestEventMinimalSpec(t *testing.T) {
 
 func TestScheduleCreatesBinding(t *testing.T) {
 	b := Schedule(ScheduleOpts{
-		Expression: "0 9 * * 1-5",
+		Cron: "0 9 * * 1-5",
 		Timezone:   "America/New_York",
 	})
 
@@ -121,7 +121,7 @@ func TestScheduleCreatesBinding(t *testing.T) {
 }
 
 func TestScheduleDefaultsToUTC(t *testing.T) {
-	b := Schedule(ScheduleOpts{Expression: "* * * * *"})
+	b := Schedule(ScheduleOpts{Cron: "* * * * *"})
 
 	var cfg map[string]any
 	if err := json.Unmarshal(b.Config, &cfg); err != nil {
@@ -134,23 +134,27 @@ func TestScheduleDefaultsToUTC(t *testing.T) {
 
 func TestScheduleWithCustomConfig(t *testing.T) {
 	customCfg, _ := json.Marshal(map[string]any{
-		"expression": "*/5 * * * *",
-		"timezone":   "Europe/London",
-		"custom":     true,
+		"custom": true,
 	})
 	b := Schedule(ScheduleOpts{
-		Expression: "*/5 * * * *",
-		Timezone:   "Europe/London",
-		Config:     customCfg,
+		Cron:     "*/5 * * * *",
+		Timezone: "Europe/London",
+		Config:   customCfg,
 	})
 
-	// When Config is explicitly provided, it's used as-is
+	// Custom config fields are merged with expression/timezone
 	var cfg map[string]any
 	if err := json.Unmarshal(b.Config, &cfg); err != nil {
 		t.Fatalf("config is not valid JSON: %v", err)
 	}
 	if cfg["custom"] != true {
-		t.Fatalf("expected custom config to pass through, got %v", cfg)
+		t.Fatalf("expected custom config to be merged, got %v", cfg)
+	}
+	if cfg["expression"] != "*/5 * * * *" {
+		t.Fatalf("expected expression to be preserved, got %v", cfg["expression"])
+	}
+	if cfg["timezone"] != "Europe/London" {
+		t.Fatalf("expected timezone to be preserved, got %v", cfg["timezone"])
 	}
 }
 

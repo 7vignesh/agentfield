@@ -196,3 +196,34 @@ func TestWithTriggersBinding_AcceptsTriggersPackageBinding(t *testing.T) {
 		t.Fatalf("expected source slack, got %s", r.Triggers[0].Source)
 	}
 }
+
+func TestWithTriggers_PreservesTransformFromTriggersBinding(t *testing.T) {
+	a := newTriggerTestAgent(t, "test-transform-via-withtriggers")
+
+	transform := func(evt map[string]any) any {
+		return evt["data"]
+	}
+
+	a.RegisterReasoner("handle_event", func(ctx context.Context, input map[string]any) (any, error) {
+		return nil, nil
+	}, WithTriggers(triggers.Event(triggers.EventOpts{
+		Source:    "stripe",
+		Types:     []string{"payment_intent.succeeded"},
+		Transform: transform,
+	})))
+
+	r := a.reasoners["handle_event"]
+	if len(r.triggerBindings) != 1 {
+		t.Fatalf("expected 1 trigger binding with transform, got %d", len(r.triggerBindings))
+	}
+	if r.triggerBindings[0].TransformFn == nil {
+		t.Fatal("expected Transform to be preserved when using WithTriggers(triggers.Event(...))")
+	}
+	// Wire binding should also be populated
+	if len(r.Triggers) != 1 {
+		t.Fatalf("expected 1 wire trigger, got %d", len(r.Triggers))
+	}
+	if r.Triggers[0].Source != "stripe" {
+		t.Fatalf("expected source stripe, got %s", r.Triggers[0].Source)
+	}
+}
