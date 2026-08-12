@@ -10,10 +10,11 @@ and raises a clear error instead of hanging forever.
 
 from __future__ import annotations
 
+import math
 import os
 import threading
 from contextlib import contextmanager
-from typing import Union
+from typing import Optional, Union
 
 from .logger import get_logger
 
@@ -23,9 +24,43 @@ logger = get_logger(__name__)
 # trip under normal contention, short enough to surface a real deadlock
 # within minutes rather than hours. Configurable via the env var
 # AGENTFIELD_LOCK_TIMEOUT_SECONDS.
-DEFAULT_LOCK_TIMEOUT: float = float(
-    os.environ.get("AGENTFIELD_LOCK_TIMEOUT_SECONDS", "30")
-)
+FALLBACK_LOCK_TIMEOUT: float = 30.0
+
+_LOCK_TIMEOUT_ENV_VAR = "AGENTFIELD_LOCK_TIMEOUT_SECONDS"
+
+
+def _parse_lock_timeout(raw: Optional[str]) -> float:
+    """Parse the lock timeout env var, falling back to the default.
+
+    This runs at import time, so it must never raise: an unset-but-present
+    (``AGENTFIELD_LOCK_TIMEOUT_SECONDS=``) or malformed value would otherwise
+    break ``import agentfield`` entirely. A non-positive or non-finite value
+    is rejected too — ``lock.acquire()`` refuses those on every call.
+    """
+    if raw is None or not raw.strip():
+        return FALLBACK_LOCK_TIMEOUT
+
+    try:
+        timeout = float(raw)
+    except ValueError:
+        logger.warning(
+            f"Ignoring invalid {_LOCK_TIMEOUT_ENV_VAR}={raw!r} "
+            f"(not a number); using {FALLBACK_LOCK_TIMEOUT}s"
+        )
+        return FALLBACK_LOCK_TIMEOUT
+
+    if not math.isfinite(timeout) or timeout <= 0:
+        logger.warning(
+            f"Ignoring out-of-range {_LOCK_TIMEOUT_ENV_VAR}={raw!r} "
+            f"(must be a positive, finite number of seconds); "
+            f"using {FALLBACK_LOCK_TIMEOUT}s"
+        )
+        return FALLBACK_LOCK_TIMEOUT
+
+    return timeout
+
+
+DEFAULT_LOCK_TIMEOUT: float = _parse_lock_timeout(os.environ.get(_LOCK_TIMEOUT_ENV_VAR))
 
 
 class LockTimeoutError(TimeoutError):

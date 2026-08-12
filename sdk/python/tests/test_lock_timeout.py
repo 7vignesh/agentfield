@@ -10,6 +10,9 @@ Verifies:
 """
 
 import asyncio
+import os
+import subprocess
+import sys
 import threading
 import time
 import warnings
@@ -18,6 +21,7 @@ import pytest
 
 from agentfield.lock_utils import (
     DEFAULT_LOCK_TIMEOUT,
+    FALLBACK_LOCK_TIMEOUT,
     LockTimeoutError,
     timed_lock,
 )
@@ -96,6 +100,58 @@ def test_default_timeout_is_reasonable():
     """Default timeout should be > 0 and configurable."""
     assert DEFAULT_LOCK_TIMEOUT > 0
     assert DEFAULT_LOCK_TIMEOUT <= 300  # not absurdly high
+
+
+def _import_time_default_timeout(env_value):
+    """Import agentfield.lock_utils in a subprocess and read DEFAULT_LOCK_TIMEOUT.
+
+    DEFAULT_LOCK_TIMEOUT is resolved at import time, so a fresh interpreter is
+    the only way to exercise the parsing that actually ships.
+    """
+    env = dict(os.environ)
+    if env_value is None:
+        env.pop("AGENTFIELD_LOCK_TIMEOUT_SECONDS", None)
+    else:
+        env["AGENTFIELD_LOCK_TIMEOUT_SECONDS"] = env_value
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import agentfield.lock_utils as m; "
+            "print('DEFAULT_LOCK_TIMEOUT', m.DEFAULT_LOCK_TIMEOUT)",
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert completed.returncode == 0, (
+        f"import failed for AGENTFIELD_LOCK_TIMEOUT_SECONDS={env_value!r}: "
+        f"{completed.stderr}"
+    )
+    for line in completed.stdout.splitlines():
+        if line.startswith("DEFAULT_LOCK_TIMEOUT "):
+            return float(line.split(" ", 1)[1])
+    raise AssertionError(f"no value printed; stdout was: {completed.stdout!r}")
+
+
+@pytest.mark.parametrize(
+    "env_value,expected",
+    [
+        (None, FALLBACK_LOCK_TIMEOUT),  # unset
+        ("", FALLBACK_LOCK_TIMEOUT),  # `AGENTFIELD_LOCK_TIMEOUT_SECONDS=` in compose
+        ("   ", FALLBACK_LOCK_TIMEOUT),
+        ("abc", FALLBACK_LOCK_TIMEOUT),  # not a number
+        ("-5", FALLBACK_LOCK_TIMEOUT),  # lock.acquire() rejects negative timeouts
+        ("0", FALLBACK_LOCK_TIMEOUT),
+        ("inf", FALLBACK_LOCK_TIMEOUT),  # lock.acquire() rejects it as too large
+        ("12.5", 12.5),  # valid override survives
+    ],
+)
+def test_import_never_fails_on_bad_env(env_value, expected):
+    """A malformed env var must not take down `import agentfield`."""
+    assert _import_time_default_timeout(env_value) == expected
 
 
 def test_execute_sync_warns_in_running_loop():
