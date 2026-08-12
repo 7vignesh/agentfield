@@ -278,7 +278,7 @@ class HarnessConfig(BaseModel):
         ...,
         description=(
             'Coding agent provider: "aforge" | "claude-code" | "codex" | '
-            '"gemini" | "opencode"'
+            '"gemini" | "opencode" | "grok"'
         ),
     )
     model: str = Field(default="sonnet", description="Default model identifier.")
@@ -325,6 +325,9 @@ class HarnessConfig(BaseModel):
         default="opencode", description="Path to opencode binary."
     )
     aforge_bin: str = Field(default="aforge", description="Path to aforge binary.")
+    grok_bin: str = Field(
+        default="grok", description="Path to Grok Build CLI binary."
+    )
     schema_mode: str = Field(
         default="single",
         description=(
