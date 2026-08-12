@@ -71,4 +71,3 @@ func bindingToWire(b triggers.Binding) types.TriggerBinding {
 		CodeOrigin:   b.CodeOrigin,
 	}
 }
-

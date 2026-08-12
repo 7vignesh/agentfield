@@ -97,8 +97,8 @@ func TestEventMinimalSpec(t *testing.T) {
 
 func TestScheduleCreatesBinding(t *testing.T) {
 	b := Schedule(ScheduleOpts{
-		Cron: "0 9 * * 1-5",
-		Timezone:   "America/New_York",
+		Cron:     "0 9 * * 1-5",
+		Timezone: "America/New_York",
 	})
 
 	if b.Kind != ScheduleBinding {
