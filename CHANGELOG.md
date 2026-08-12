@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.128-rc.1] - 2026-08-12
+
+
+### Fixed
+
+- Fix(go-sdk): allow custom HTTP clients for AI requests (#908) (5c369b5)
+
 ## [0.1.127] - 2026-08-10
 
 ## [0.1.127-rc.7] - 2026-08-10
