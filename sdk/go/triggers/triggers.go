@@ -44,9 +44,13 @@ type Context struct {
 }
 
 // Transform is an optional sync function to convert a raw provider event
-// into the reasoner's input. When set, the SDK runs Transform(rawEvent)
-// before invoking the reasoner; the handler's input parameter receives
-// the return value rather than the raw event. Must be synchronous.
+// into the reasoner's input. Must be synchronous.
+//
+// EXPERIMENTAL: The Go SDK stores the transform on the binding but does not
+// execute it yet — a reasoner invoked by an inbound event still receives the
+// raw event. Dispatch-time execution is planned for #514 (dispatch envelope
+// unwrap + Context injection). Do not depend on the transform running until
+// that issue ships.
 type Transform func(rawEvent map[string]any) any
 
 // EventOpts configures an event trigger binding.
@@ -63,6 +67,8 @@ type EventOpts struct {
 	// Source-specific JSON config (timestamp tolerance, custom header names, etc).
 	Config json.RawMessage
 	// Optional sync transform to convert raw provider event to reasoner input.
+	// EXPERIMENTAL: stored on the binding but not executed by the Go SDK yet;
+	// dispatch-time execution ships with #514. See Transform.
 	Transform Transform
 }
 
