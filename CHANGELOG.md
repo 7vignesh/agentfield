@@ -6,6 +6,64 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.128-rc.2] - 2026-08-12
+
+
+### Added
+
+- Feat(harness): add Grok Build CLI provider (#861)
+
+* feat(harness): add Grok Build CLI provider
+
+Introduce a first-class harness provider for the local Grok Build CLI so
+AgentField can drive Grok headless sessions the same way it drives Codex,
+OpenCode, Gemini, and Claude Code.
+
+The provider wraps the Grok CLI with a PTY (via script) because plain pipes
+currently fail with "Device not configured", feeds prompts through
+--prompt-file to avoid argv limits, and normalizes missing token usage to
+zero so metrics aggregation does not crash on incomplete usage objects.
+
+* fix(harness): use util-linux script -c form on Linux for grok PTY wrapper
+
+`script -q /dev/null grok ...` only runs the command on BSD/macOS. util-linux
+`script` takes at most one positional (the typescript file) and ignores the
+rest, falling back to spawning $SHELL interactively — so on Linux runners the
+grok CLI never started and the process sat on a bash prompt until the harness
+idle watchdog killed it. Verified on util-linux 2.37.2: both
+`script -q /dev/null /bin/echo hi` and the `--`-separated
+`script -q /dev/null -- /bin/echo hi` hang on an interactive prompt and never
+echo.
+
+Route the wrapper through a `_pty_command` helper that picks the right form
+per flavor: `script -q -e -c "<cmd>" /dev/null` on Linux, the existing
+trailing-argv form on BSD/macOS, and the command untouched on Windows or when
+script(1) is absent. `-e` is required on util-linux, otherwise script exits 0
+regardless of the child's status and masks every non-zero grok exit from the
+returncode handling below it.
+
+The `-c` form goes through a shell, so argv is joined with shlex.quote: grok
+arguments carry caller-controlled text (--system-prompt-override, project
+paths) that must reach the CLI verbatim and never be re-interpreted as shell
+syntax. A round-trip test asserts shlex.split of the generated string equals
+the original argv for input containing quotes, spaces and shell metacharacters.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com>
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (f3bc5c5)
+
+## [0.1.128-rc.1] - 2026-08-12
+
+
+### Fixed
+
+- Fix(go-sdk): allow custom HTTP clients for AI requests (#908) (5c369b5)
+
+## [0.1.127] - 2026-08-10
+
 ## [0.1.127-rc.7] - 2026-08-10
 
 

@@ -24,6 +24,7 @@ import (
 	"github.com/Agent-Field/agentfield/sdk/go/client"
 	"github.com/Agent-Field/agentfield/sdk/go/did"
 	"github.com/Agent-Field/agentfield/sdk/go/harness"
+	triggerspkg "github.com/Agent-Field/agentfield/sdk/go/triggers"
 	"github.com/Agent-Field/agentfield/sdk/go/types"
 )
 
@@ -153,6 +154,12 @@ type Reasoner struct {
 	// nil/empty = inherit default ("warn"), "true" = explicitly opt in, "false" = explicitly refuse.
 	// Auto-set to "true" if any Triggers are declared.
 	AcceptsWebhook *string
+
+	// triggerBindings stores the full triggers.Binding values (including the
+	// non-serialisable Transform function) for dispatch-time use. Populated
+	// by withTriggersBinding / OnEvent / OnSchedule. Not exported because
+	// the wire payload uses Triggers (types.TriggerBinding) above.
+	triggerBindings []triggerspkg.Binding
 }
 
 // EventTrigger describes an external event source binding for a reasoner.
@@ -185,13 +192,27 @@ func captureCodeOrigin(skip int) string {
 }
 
 // WithTriggers is the canonical decorator-equivalent for declaring trigger
-// bindings on a Go reasoner. Pass a mix of EventTrigger and ScheduleTrigger
-// values; unknown types are silently ignored so adding new kinds later is
-// backward compatible.
-func WithTriggers(triggers ...any) ReasonerOption {
+// bindings on a Go reasoner. Pass a mix of EventTrigger, ScheduleTrigger,
+// or triggers.Binding values; unknown types are silently ignored so adding
+// new kinds later is backward compatible.
+func WithTriggers(trigs ...any) ReasonerOption {
 	codeOrigin := captureCodeOrigin(2)
 	return func(r *Reasoner) {
-		for _, t := range triggers {
+		for _, t := range trigs {
+			// If it's a triggers.Binding, store both the wire binding AND
+			// the full Binding (preserving Transform) for dispatch-time use.
+			if tb, ok := t.(triggerspkg.Binding); ok {
+				wire := bindingToWire(tb)
+				if wire.CodeOrigin == "" {
+					wire.CodeOrigin = codeOrigin
+				}
+				if tb.CodeOrigin == "" {
+					tb.CodeOrigin = codeOrigin
+				}
+				r.Triggers = append(r.Triggers, wire)
+				r.triggerBindings = append(r.triggerBindings, tb)
+				continue
+			}
 			binding, ok := triggerToBinding(t)
 			if !ok {
 				continue
@@ -280,6 +301,8 @@ func triggerToBinding(t any) (types.TriggerBinding, bool) {
 			"timezone":   tz,
 		})
 		return types.TriggerBinding{Source: "cron", Config: cfg}, true
+	case triggerspkg.Binding:
+		return bindingToWire(v), true
 	default:
 		return types.TriggerBinding{}, false
 	}
