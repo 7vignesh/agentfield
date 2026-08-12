@@ -63,8 +63,15 @@ def _parse_lock_timeout(raw: Optional[str]) -> float:
 DEFAULT_LOCK_TIMEOUT: float = _parse_lock_timeout(os.environ.get(_LOCK_TIMEOUT_ENV_VAR))
 
 
-class LockTimeoutError(TimeoutError):
-    """Raised when a lock cannot be acquired within the timeout period."""
+class LockTimeoutError(RuntimeError):
+    """Raised when a lock cannot be acquired within the timeout period.
+
+    Deliberately *not* a TimeoutError: on Python 3.11+ asyncio.TimeoutError is
+    TimeoutError, so an `except asyncio.TimeoutError` guard anywhere up the
+    stack (Agent.call wraps client.execute in asyncio.wait_for, and that path
+    touches the result cache) would swallow this and report a generic timeout,
+    losing the lock name and wait diagnostics below.
+    """
 
     def __init__(self, lock_name: str, timeout: float):
         self.lock_name = lock_name

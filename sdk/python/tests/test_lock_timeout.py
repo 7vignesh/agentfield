@@ -96,6 +96,17 @@ def test_lock_timeout_error_attributes():
     assert "AGENTFIELD_LOCK_TIMEOUT_SECONDS" in str(err)
 
 
+def test_lock_timeout_error_is_not_a_timeout_error():
+    """On 3.11+ `except asyncio.TimeoutError` also catches TimeoutError.
+
+    Deriving from it would let the wait_for wrappers around client.execute()
+    swallow a real deadlock and report a generic execution timeout instead.
+    """
+    assert issubclass(LockTimeoutError, RuntimeError)
+    assert not issubclass(LockTimeoutError, TimeoutError)
+    assert not issubclass(LockTimeoutError, asyncio.TimeoutError)
+
+
 def test_default_timeout_is_reasonable():
     """Default timeout should be > 0 and configurable."""
     assert DEFAULT_LOCK_TIMEOUT > 0
