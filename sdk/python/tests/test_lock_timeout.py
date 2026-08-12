@@ -6,7 +6,10 @@ Verifies:
 - timed_lock works normally (acquires/releases) when uncontended
 - LockTimeoutError has useful debug info (lock name, timeout value)
 - The execute_sync running-loop warning fires when called from inside a loop
-- memory_events.history() fallback doesn't block the event loop
+
+The other half of #620 slice 4 — memory_events.history()'s blocking requests
+fallback — has no test here: it is guarded by the ASYNC210 ruff gate, whose
+per-file ignore for memory_events.py was dropped in pyproject.toml.
 """
 
 import asyncio
@@ -165,6 +168,10 @@ def test_import_never_fails_on_bad_env(env_value, expected):
     assert _import_time_default_timeout(env_value) == expected
 
 
+class _SubmissionBlocked(Exception):
+    """Raised by the stubbed submit hook to prove no request was ever sent."""
+
+
 def test_execute_sync_warns_in_running_loop():
     """execute_sync() emits RuntimeWarning when called from a running loop thread."""
     from agentfield.client import AgentFieldClient
@@ -173,26 +180,24 @@ def test_execute_sync_warns_in_running_loop():
     client = AgentFieldClient.__new__(AgentFieldClient)
     client.api_base = "http://localhost:8080/api/v1"
     client.api_key = None
+    client.caller_agent_id = None
     client.async_config = AsyncConfig()
 
-    # Simulate calling execute_sync from within a running loop's thread
-    # (the dangerous pattern). We can't actually call it from an async def
-    # (that would deadlock), so we test the detection logic directly.
-    async def main():
-        # We're now on the event loop thread with a running loop.
-        # Calling execute_sync here would detect the running loop.
-        import asyncio
-        loop = asyncio.get_running_loop()
-        assert loop is not None  # loop IS running
+    def _blocked(*args, **kwargs):
+        raise _SubmissionBlocked("execute_sync must not reach the control plane")
 
-        with warnings.catch_warnings(record=True) as w:
+    # Without this the call would POST to api_base and start polling — on a
+    # dev box with a control plane up, the suite would submit a live execution.
+    client._submit_execution_sync = _blocked
+
+    # We can't call execute_sync from an async def (that would deadlock), so
+    # drive it from the loop thread and let the stub stop it at submission.
+    async def main():
+        with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
-            try:
+            with pytest.raises(_SubmissionBlocked):
                 client.execute_sync("test.reasoner", {"input": "x"})
-            except Exception:
-                pass  # Will fail on missing config, we only check the warning
-            runtime_warnings = [x for x in w if issubclass(x.category, RuntimeWarning)]
-            return runtime_warnings
+            return [w for w in caught if issubclass(w.category, RuntimeWarning)]
 
     result = asyncio.run(main())
     assert len(result) >= 1
