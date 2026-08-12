@@ -20,6 +20,7 @@ from .async_lifecycle import (
     current_running_loop,
 )
 from .execution_state import ExecutionState
+from .lock_utils import timed_lock
 from .logger import get_logger
 
 logger = get_logger(__name__)
@@ -148,12 +149,12 @@ class ResultCache:
 
     def __len__(self) -> int:
         """Get current cache size."""
-        with self._lock:
+        with timed_lock(self._lock, "result_cache"):
             return len(self._cache)
 
     def __contains__(self, key: str) -> bool:
         """Check if key exists in cache (without affecting LRU order)."""
-        with self._lock:
+        with timed_lock(self._lock, "result_cache"):
             return key in self._cache and not self._cache[key].is_expired
 
     async def __aenter__(self):
@@ -247,7 +248,7 @@ class ResultCache:
         if self._loop is owning_loop:
             self._loop = None
 
-        with self._lock:
+        with timed_lock(self._lock, "result_cache"):
             self._cache.clear()
             self.metrics.size = 0
 
@@ -267,7 +268,7 @@ class ResultCache:
             self.metrics.record_miss()
             return None
 
-        with self._lock:
+        with timed_lock(self._lock, "result_cache"):
             if key not in self._cache:
                 self.metrics.record_miss()
                 return None
@@ -305,7 +306,7 @@ class ResultCache:
         if ttl is None:
             ttl = self.config.result_cache_ttl
 
-        with self._lock:
+        with timed_lock(self._lock, "result_cache"):
             # Remove existing entry if present
             if key in self._cache:
                 del self._cache[key]
@@ -335,7 +336,7 @@ class ResultCache:
         Returns:
             True if key was found and deleted, False otherwise
         """
-        with self._lock:
+        with timed_lock(self._lock, "result_cache"):
             if key in self._cache:
                 self._remove_entry(key)
                 return True
@@ -343,7 +344,7 @@ class ResultCache:
 
     def clear(self) -> None:
         """Clear all entries from the cache."""
-        with self._lock:
+        with timed_lock(self._lock, "result_cache"):
             self._cache.clear()
             self.metrics.size = 0
             logger.debug("Cache cleared")
@@ -395,7 +396,7 @@ class ResultCache:
         Returns:
             List of cache keys
         """
-        with self._lock:
+        with timed_lock(self._lock, "result_cache"):
             keys = list(self._cache.keys())
 
             if pattern:
@@ -410,7 +411,7 @@ class ResultCache:
         Returns:
             Dictionary with cache statistics
         """
-        with self._lock:
+        with timed_lock(self._lock, "result_cache"):
             # Calculate additional stats
             total_entries = len(self._cache)
             expired_count = sum(1 for entry in self._cache.values() if entry.is_expired)
@@ -485,7 +486,7 @@ class ResultCache:
                 # lock internally (get_stats), so doing it outside avoids
                 # holding the lock across extra work and keeps contention low
                 # for concurrent sync callers (get/set) on other threads.
-                with self._lock:
+                with timed_lock(self._lock, "result_cache"):
                     expired_count = self._cleanup_expired()
 
                 if expired_count > 0:
@@ -509,7 +510,7 @@ class ResultCache:
 
     def __repr__(self) -> str:
         """String representation of the cache."""
-        with self._lock:
+        with timed_lock(self._lock, "result_cache"):
             return (
                 f"ResultCache("
                 f"size={len(self._cache)}/{self.config.result_cache_max_size}, "

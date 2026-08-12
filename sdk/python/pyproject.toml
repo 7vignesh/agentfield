@@ -142,7 +142,6 @@ extend-select = [
 "agentfield/harness/_runner.py" = ["ASYNC240"]
 "agentfield/harness/providers/opencode.py" = ["ASYNC240"]
 "agentfield/media_providers.py" = ["ASYNC240"]
-"agentfield/memory_events.py" = ["ASYNC210"]
 "tests/debug_complex_json.py" = ["ASYNC230", "ASYNC240"]
 "tests/test_cancel.py" = ["ASYNC110"]
 "tests/test_harness_functional.py" = ["ASYNC230", "ASYNC240"]
