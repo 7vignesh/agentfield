@@ -158,6 +158,75 @@ func TestScheduleWithCustomConfig(t *testing.T) {
 	}
 }
 
+func TestScheduleCronOverridesCustomExpression(t *testing.T) {
+	customCfg, _ := json.Marshal(map[string]any{
+		"expression": "0 0 * * 0",
+		"custom":     true,
+	})
+	b := Schedule(ScheduleOpts{
+		Cron:   "*/5 * * * *",
+		Config: customCfg,
+	})
+
+	var cfg map[string]any
+	if err := json.Unmarshal(b.Config, &cfg); err != nil {
+		t.Fatalf("config is not valid JSON: %v", err)
+	}
+	if cfg["expression"] != "*/5 * * * *" {
+		t.Fatalf("expected Cron to win over custom expression, got %v", cfg["expression"])
+	}
+	if cfg["custom"] != true {
+		t.Fatalf("expected custom config to be merged, got %v", cfg)
+	}
+}
+
+func TestScheduleIgnoresUnusableConfig(t *testing.T) {
+	cases := map[string]json.RawMessage{
+		"malformed": json.RawMessage("{not json"),
+		"array":     json.RawMessage(`["a","b"]`),
+		"scalar":    json.RawMessage(`42`),
+	}
+
+	for name, raw := range cases {
+		t.Run(name, func(t *testing.T) {
+			b := Schedule(ScheduleOpts{
+				Cron:     "0 9 * * 1-5",
+				Timezone: "America/New_York",
+				Config:   raw,
+			})
+
+			var cfg map[string]any
+			if err := json.Unmarshal(b.Config, &cfg); err != nil {
+				t.Fatalf("config is not valid JSON: %v", err)
+			}
+			if cfg["expression"] != "0 9 * * 1-5" {
+				t.Fatalf("expected expression '0 9 * * 1-5', got %v", cfg["expression"])
+			}
+			if cfg["timezone"] != "America/New_York" {
+				t.Fatalf("expected timezone America/New_York, got %v", cfg["timezone"])
+			}
+		})
+	}
+}
+
+func TestSchedulePreservesCustomTimezoneWhenUnset(t *testing.T) {
+	customCfg, _ := json.Marshal(map[string]any{
+		"timezone": "Asia/Tokyo",
+	})
+	b := Schedule(ScheduleOpts{
+		Cron:   "* * * * *",
+		Config: customCfg,
+	})
+
+	var cfg map[string]any
+	if err := json.Unmarshal(b.Config, &cfg); err != nil {
+		t.Fatalf("config is not valid JSON: %v", err)
+	}
+	if cfg["timezone"] != "Asia/Tokyo" {
+		t.Fatalf("expected custom timezone Asia/Tokyo to be preserved, got %v", cfg["timezone"])
+	}
+}
+
 func TestContextFields(t *testing.T) {
 	now := time.Now()
 	ctx := &Context{

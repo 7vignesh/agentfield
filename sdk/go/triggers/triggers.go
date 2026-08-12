@@ -78,7 +78,11 @@ type ScheduleOpts struct {
 	Cron string
 	// IANA timezone name. Defaults to "UTC".
 	Timezone string
-	// Optional source-specific config (merged with expression/timezone).
+	// Optional source-specific config, merged into the binding config. Must
+	// marshal to a JSON object; malformed or non-object config is ignored.
+	// The "expression" and "timezone" keys are controlled by the Cron and
+	// Timezone fields: a custom "expression" is always overridden by Cron,
+	// and a custom "timezone" is kept only when Timezone is empty.
 	Config json.RawMessage
 }
 
@@ -128,23 +132,21 @@ func Event(opts EventOpts) Binding {
 // The expression and timezone are always merged into Config so the control
 // plane sees them regardless of whether custom Config was provided.
 func Schedule(opts ScheduleOpts) Binding {
-	tz := opts.Timezone
-	if tz == "" {
-		tz = "UTC"
-	}
-	// Always include expression and timezone in config. If the caller
-	// provided custom Config, merge expression/timezone into it.
-	base := map[string]any{
-		"expression": opts.Cron,
-		"timezone":   tz,
-	}
-	if opts.Config != nil {
+	base := map[string]any{}
+	// Custom keys are merged first so Cron and Timezone stay authoritative.
+	if len(opts.Config) > 0 {
 		var custom map[string]any
 		if err := json.Unmarshal(opts.Config, &custom); err == nil {
 			for k, v := range custom {
 				base[k] = v
 			}
 		}
+	}
+	base["expression"] = opts.Cron
+	if opts.Timezone != "" {
+		base["timezone"] = opts.Timezone
+	} else if _, ok := base["timezone"]; !ok {
+		base["timezone"] = "UTC"
 	}
 	cfg, _ := json.Marshal(base)
 	return Binding{
