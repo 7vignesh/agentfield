@@ -6,6 +6,116 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.129-rc.1] - 2026-08-13
+
+
+### Fixed
+
+- Fix: repair broken quickstart flows — Go docs/examples, docker scaffolds, TS template (#918)
+
+* fix(examples): regenerate stale go.sum in Go example modules
+
+examples/go_agent_nodes and examples/go_harness_demo stopped building when
+sdk/go added jsonschema/v5 (#750) without their go.sum being refreshed:
+'missing go.sum entry for module providing package .../jsonschema/v5'.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* docs(sdk/go): fix broken quickstart and approvals snippets
+
+- Quick Start omitted the required Config.Version, so a copy-paste run
+  exited with 'config.Version is required'; the CLAUDE.md variant also
+  discarded the error from New and nil-panicked on RegisterSkill.
+- Approvals snippet called client.New with one return value (it returns
+  (*Client, error)) and passed a nil variadic Option, which panics.
+
+Both snippets now compile and start against the current SDK.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(cli): make 'af init --docker' work for Go and TypeScript scaffolds
+
+The generated docker-compose.yml builds the agent from 'dockerfile:
+Dockerfile' for every language, but only Python mapped a Dockerfile
+template — Go and TypeScript scaffolds failed at 'docker compose up'.
+
+- Add go.Dockerfile.tmpl and typescript.Dockerfile.tmpl and map them in
+  GetDockerTemplateFiles; the test now asserts every language maps
+  exactly one Dockerfile instead of codifying the gap.
+- Wire AGENT_CALLBACK_URL (set by the compose template) through to the
+  SDK's public URL in the Go and TypeScript scaffolds so the control
+  plane can reach containerized agents; Python already reads it.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(cli): TypeScript scaffold never started from a path containing spaces
+
+The main-module guard compared import.meta.url (percent-encoded) against
+a raw 'file://' + process.argv[1] string, so under any path with a space
+(e.g. 'My Projects/') the guard was false and 'npm run dev' exited
+silently without starting the agent. Compare against
+pathToFileURL(process.argv[1]).href instead.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(cli): unify scaffold env var names on AGENTFIELD_SERVER / AGENT_NODE_ID
+
+The TypeScript scaffold read AGENTFIELD_URL/AGENT_ID while Python, Go,
+the docs, and the docker-compose template all use AGENTFIELD_SERVER/
+AGENT_NODE_ID — a TS agent given the documented variable silently
+registered with the default localhost:8080 instead. The old names are
+kept as fallbacks for existing setups.
+
+Python and Go .env.example advertised AGENTFIELD_CONTROL_PLANE_URL,
+which nothing reads; they now list the variables the scaffolds honor.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(cli): scaffold polish — accurate next steps, current dep floors, ruff-clean output
+
+- Python next steps (README + af init output) told users to uncomment an
+  ai_config that the scaffold already ships enabled, and the README
+  promised port auto-discovery while main.py pins port 8001.
+- Fresh Python scaffolds failed 'ruff check' out of the box (F401 on
+  pydantic imports only used by the commented AI sample); the imports
+  now live inside that commented block.
+- TypeScript AI sample never passed the input text into the prompt.
+- Dep floors were stale: @agentfield/sdk pinned ^0.1.0 (128 releases
+  old) and requirements.txt had no floor at all. Both now sit at the
+  current release, and bump_version.py updates them on stable releases
+  the same way it already maintains go.mod.tmpl.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(cli): close scaffold gaps found in verification
+
+- .dockerignore.tmpl (shared by all languages) did not exclude
+  node_modules, so a host install was COPY'd over the container's in the
+  TypeScript image, shadowing it with host-arch binaries; it now covers
+  Node and Python artifacts for every language.
+- The Go scaffold hardcoded NodeID, silently ignoring the AGENT_NODE_ID
+  override that the generated docker-compose.yml and .env.example set.
+- Uncommenting the Python AI sample tripped ruff E402 (mid-file import);
+  the commented import now carries noqa for when it is enabled.
+- .env.example now lists AGENT_NODE_ID (and AI_MODEL for Python) to
+  match what the scaffolds actually read.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* chore(scripts): anchor agentfield matcher in bump_version + cover template updaters
+
+The requirements updater matched any line starting with 'agentfield',
+which would silently rewrite e.g. 'agentfield-cli>=1.0'; it now matches
+only the agentfield distribution (bare or with a version specifier).
+Adds regression tests for update_ts_template and the scaffold
+requirements floor, which previously had no coverage.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (a5f1573)
+
 ## [0.1.128] - 2026-08-13
 
 ## [0.1.128-rc.4] - 2026-08-13
