@@ -6,6 +6,204 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.128-rc.4] - 2026-08-13
+
+
+### Added
+
+- Feat(sdk/go): add Agent.Span for traced in-process sub-executions (#916)
+
+* feat(sdk/go): add Agent.Span for traced in-process sub-executions
+
+Span(ctx, name, input, fn) runs fn as a child execution of the context
+carried by ctx and emits workflow events so it appears as a node in the
+run's DAG — CallLocal's lineage and event emission without requiring the
+target to be a registered reasoner. The child context is injected into
+fn's ctx, so nested Span/CallLocal/Note calls chain correctly and
+concurrent Spans become siblings.
+
+Terminal events are sent synchronously (a finished span can never be
+left dangling in "running"); start events go through a bounded async
+queue and are shed first under load, which is safe because the events
+endpoint upserts nodes from the terminal event alone. fn panics emit a
+"failed" terminal event and re-raise. Input/result payloads are size-
+capped agent-side (16KB, 4KB preview) since the events path stores them
+verbatim.
+
+Motivation: the deep-research Go agent runs its internal pipeline stages
+as plain function calls, so a 12-minute prepare_research_package renders
+as a single DAG node — while the Python SDK's decorator tracking gave
+every internal stage its own node. Span restores that trace parity for
+in-process stages.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(sdk/go): make Agent.Span nil-receiver safe
+
+A nil *Agent runs fn untraced instead of panicking in
+buildChildContext. Unit tests for wrapped pipeline functions commonly
+pass a nil agent for stages that never touch the LLM; those must keep
+working when the stage gains a Span wrapper.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(sdk/go): snapshot span input before handing it to the async event queue
+
+truncateTraceInput returned the caller's map by identity whenever it fit
+under the size cap, and enqueueSpanStart handed that same map to the
+background sender goroutine, which json.Marshals it at an unbounded delay.
+Any caller that mutates the input map after Span entry — including inside
+fn itself — raced that marshal; without -race that is a process-fatal
+'concurrent map read and map write'. Reproduced with go test -race.
+
+The traced input is now deep-copied from its marshaled bytes at Span
+entry, so events carry a consistent as-of-call snapshot and never alias
+caller memory. Also aligns enqueueSpanStart's control-plane-URL guard
+with emitWorkflowEvent's TrimSpace semantics.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(control-plane): survive insert races and shed starts on the events endpoint
+
+The workflow events endpoint did Get→Create with no transaction. Two
+events for the same execution_id arriving concurrently — exactly what
+sdk/go Span produces, an async 'running' event racing the synchronous
+terminal event for any sub-millisecond span — both saw no row and raced
+to INSERT; the loser got a unique-violation 500 and was dropped. When the
+loser was the terminal event, the node stayed 'running' forever: the run
+never left /executions/active, and the stale-execution reaper eventually
+flipped it to timeout, making a finished run render as timed out.
+Reproduced live: 550-span flood → 11 nodes stranded, 30 dropped events.
+
+The handler now retries in a bounded loop: a failed create re-reads and
+merges through the update path (the row necessarily exists once the racing
+winner lands), and a row that vanishes between read and update re-creates
+instead of silently no-oping. Terminal-state immutability is unchanged.
+Post-fix the same flood persists 551/551 nodes terminal with zero errors.
+
+Also backdate StartedAt by duration_ms when a node is created from its
+terminal event alone (start event shed under queue pressure), so such
+nodes get a real timeline bar instead of a zero-width one at arrival time.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (526466c)
+
+- Feat(sdk/go): dispatch envelope unwrap + Context injection (#514) (#914)
+
+* chore(release): v0.1.118-rc.1 [skip ci]
+
+* chore(release): v0.1.118-rc.3 [skip ci]
+
+* feat(sdk/go): dispatch envelope unwrap + Context injection (#514)
+
+Wire the dispatch-side envelope unwrap and *triggers.Context injection into
+the Go SDK reasoner dispatch paths, so a webhook delivery from the control
+plane lands on the handler with the transformed payload and populated
+trigger metadata.
+
+New sdk/go/triggers/dispatch.go:
+- IsEnvelope(body) detects the dispatcher shape {event, _meta} (requires
+  _meta.trigger_id, so ordinary payloads are never misread)
+- Unwrap(body) peels the event and builds a *Context from _meta, with
+  multi-layout received_at parsing and a now() fallback
+- NewContext / FromContext propagate the trigger metadata through
+  context.Context, so HandlerFunc keeps its existing signature (no
+  breaking change for current reasoners)
+- ApplyTransform picks the best-matching binding (source match, exact or
+  dotted-prefix event type, specific beats catch-all) and runs its
+  Transform, recovering from a panicking transform to raw input
+
+Wired into every dispatch path via a single applyTriggerDispatch helper so
+they cannot drift: handleReasoner (sync HTTP), executeReasonerAsync (async
+goroutine), handleExecute (/execute route), Execute (local), and
+HandleServerlessEvent (serverless). CallLocal is deliberately left alone,
+since agent-to-agent calls are direct invocations by definition.
+
+Direct calls are unchanged: input passes through untouched, Transform is
+skipped, and FromContext returns nil.
+
+Tests: 17 tests in triggers/dispatch_test.go (envelope detection table,
+unwrap, timestamp fallbacks, context round-trip, transform matching,
+specificity, prefix match, panic recovery) plus 6 end-to-end tests in
+agent/agent_dispatch_triggers_test.go proving both shapes through the real
+Execute path. go build/vet clean, go test -race ./triggers/ green.
+
+Part of #508. Closes #514.
+
+* docs(sdk/go): drop EXPERIMENTAL caveats now that dispatch is wired (#514)
+
+The Context, Transform, and EventOpts.Transform docs carried EXPERIMENTAL
+notes saying dispatch-time execution and context injection would ship with
+#514. This PR is that work, so the caveats are now stale and describe the
+opposite of reality.
+
+Replaced with accurate contracts: FromContext(ctx) retrieval with the nil
+check distinguishing trigger dispatches from direct calls, Transform running
+before the handler on dispatches only, and the panic-degrades-to-passthrough
+behaviour. Kept the VCID caveat, which is still pending the DID/VC chain
+work tracked separately.
+
+Follows up on @AbirAbbas's review of #906, which flagged these docs as
+promising behaviour that was not yet wired.
+
+---------
+
+Co-authored-by: github-actions[bot] <github-actions[bot]@users.noreply.github.com> (f6e6f11)
+
+- Feat(sdk/go): trigger test helpers + fixture library (#515) (#915)
+
+* chore(release): v0.1.118-rc.1 [skip ci]
+
+* chore(release): v0.1.118-rc.3 [skip ci]
+
+* feat(sdk/go): trigger test helpers + fixture library (#515)
+
+Add Go test helpers and a captured-fixture library so reasoners can be
+unit-tested without spinning up a control plane, mirroring the Python
+agentfield/testing.py surface.
+
+New sdk/go/triggers/testing.go:
+- SimulateEvent(t, handler, opts) builds the *Context the runtime would
+  have produced, applies the matching binding's Transform, and invokes the
+  handler with the context attached
+- SimulateSchedule(t, handler, opts) wraps SimulateEvent for cron handlers
+  (source "cron", event type "tick")
+- SimulatedContextFrom(ctx) retrieves the synthetic context in tests
+- Identifiers default to fresh random values so repeated simulations are
+  independently dedup-safe; every field is overridable
+- Transform matching mirrors the other SDKs exactly (source match, exact or
+  dotted-prefix event type, specific beats catch-all) and recovers from a
+  panicking transform to raw input
+
+New sdk/go/triggers/load_fixture.go:
+- LoadFixture(t, name) reads a captured payload, accepting "stripe" or
+  "stripe.json"
+- RawFixture(t, name) returns undecoded bytes for byte-level assertions
+- FixtureNames() lists all six sources for table-driven tests
+- Fixtures are embedded with go:embed rather than read from a relative
+  testdata path, so LoadFixture works from any caller's working directory
+  including the module cache
+
+New sdk/go/triggers/testdata/*.json: six fixtures (stripe, github, slack,
+cron, generic_hmac, generic_bearer) copied byte-for-byte from the Python SDK.
+
+Tests: 61 test cases covering all six fixtures through SimulateEvent, known
+field values per provider, transform application and source mismatch,
+identifier overrides and uniqueness, parent-context propagation, handler
+error propagation, non-object and panicking transforms, and the schedule
+helper. Includes a parity guard asserting the fixtures are byte-identical to
+the Python SDK copies, plus a check that FixtureNames() stays in sync with
+the embedded files. go test -race ./triggers/ green, build/vet clean.
+
+Part of #508. Closes #515.
+
+---------
+
+Co-authored-by: github-actions[bot] <github-actions[bot]@users.noreply.github.com> (4a7529c)
+
 ## [0.1.128-rc.3] - 2026-08-13
 
 
