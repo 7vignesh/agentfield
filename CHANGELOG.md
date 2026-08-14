@@ -6,6 +6,62 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.130-rc.1] - 2026-08-14
+
+
+### Fixed
+
+- Fix(ui): only prompt for the admin token when the server enforces one (#920)
+
+* fix(ui): only prompt for the admin token when the server enforces one
+
+The Access management page rendered the admin-token input
+unconditionally, so deployments that never configured
+AGENTFIELD_AUTHORIZATION_ADMIN_TOKEN were still asked for a token the
+server would never read (AdminTokenAuth is a no-op when the configured
+token is empty). Operators pasted whatever they had — usually the API
+key — into a field that does nothing.
+
+The governance probe already received the discriminating signal and
+threw it away: it collapsed the status of GET /api/v1/admin/policies
+into `status !== 404`, which also misread 401 (API-key problem) as
+"admin routes available".
+
+Replace the boolean probe with a tri-state one that deliberately omits
+X-Admin-Token — since AdminTokenAuth wraps the whole admin group, the
+tokenless status is authoritative for every admin route:
+
+- 404 → authorization feature disabled (existing banner, no prompt)
+- 403 → an admin token is enforced: the only state that shows the
+  prompt; policy/tag queries and mutations are gated until a token
+  is stored
+- 200 → no admin token enforced: prompt hidden, admin APIs just work;
+  a stored stale token gets a hint that it can be cleared
+- 401 → surfaced as an API-key error instead of "routes available"
+
+Also drop the "unchanged repo default is often admin-secret" hint
+copy: it is only true for a source checkout run from control-plane/
+(or a deploy pointing AGENTFIELD_CONFIG_FILE at the bundled YAML) and
+misled operators of env-configured deployments into pasting wrong
+values.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(ui): drop the admin-token field from the login screen
+
+At sign-in the client cannot yet know whether the server enforces an
+admin token (an unauthenticated probe always 401s), so the "Admin
+Token (optional)" field was another unconditional prompt inviting
+wrong pastes. Access management now asks for the token in the one
+state where it is actually required, so the login screen only asks
+for the API key.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (f3e5ec9)
+
 ## [0.1.129] - 2026-08-13
 
 ## [0.1.129-rc.1] - 2026-08-13
