@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.130-rc.3] - 2026-08-17
+
+
+### Fixed
+
+- Fix high-severity npm dependency alerts (#922)
+
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com> (efbaca3)
+
 ## [0.1.130-rc.2] - 2026-08-17
 
 
