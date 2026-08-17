@@ -6,6 +6,173 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.130-rc.4] - 2026-08-17
+
+
+### Added
+
+- Feat(install): provision the aforge harness binary alongside af (curl, desktop, docker) (#924)
+
+* feat(aforge): pinned-binary provisioner for the aforge coding harness
+
+AgentField's harness providers spawn `aforge exec --json`, but nothing in the
+product ever put that binary on a machine — every install surface assumed the
+user had built it from a private repo. This adds the provisioning half.
+
+Shaped on internal/furrow's provisioner (same lock, marker, atomic-rename and
+best-effort contract) with three deliberate differences:
+
+  * assets are distributed gzipped, so the stream is decompressed before it is
+    hashed — checksums.txt carries the sha256 of the UNCOMPRESSED binary — and
+    the decompressed size is capped so a bad endpoint cannot gzip-bomb us;
+  * all six platforms are mapped, not the three furrow happens to ship;
+  * Options.Force exists so `af aforge ensure --force` can bypass the marker.
+
+AGENTFIELD_AFORGE_BASE_URL overrides the whole base (mirrors, staging hosts);
+AGENTFIELD_SKIP_AFORGE=1 makes the whole thing a no-op.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(cli): af aforge ensure, and teach the harness doctor about aforge
+
+`af aforge ensure` mirrors `af furrow ensure` — Ensure, not EnsureBestEffort,
+because someone who asks for the binary by name is owed the failure — plus a
+--force that bypasses the version marker.
+
+The doctor needed two new ideas to describe aforge honestly:
+
+  * VersionArgs, because providers do not agree on how to be asked. aforge
+    will answer `version`; every other provider answers `--version`.
+  * VersionOptional, because the pinned aforge build answers BOTH with its
+    whole usage banner on exit 1. A present, executable binary is enough to
+    call it usable; it reports version "unknown" with an informational
+    "version_unavailable" issue until the next aforge release adds the
+    subcommand. The probe requires exit 0 before it believes any output —
+    without that it would file the usage banner as the installed version.
+
+The probe also falls back to $AGENTFIELD_HOME/bin when PATH misses: the shell
+that just ran `af aforge ensure` has not re-read PATH, and reporting a binary
+we installed thirty seconds ago as missing is the wrong answer.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(install): provision aforge from the skill install and both shell installers
+
+Three entry points, one implementation. `af skill install --all`, the curl
+installer and the PowerShell installer all end up calling the same Go
+provisioner, so there is exactly one place that knows the pinned version, the
+download host and the checksum rules.
+
+The skillkit hook goes in InstallAll rather than install(): InstallAll is the
+one call every fresh machine makes, and hooking each skill would re-download a
+35MB binary once per catalog entry. --dry-run stays side-effect free.
+
+Both shell installers keep aforge strictly optional — a failed provision warns
+and moves on, because by that point the control plane is already installed and
+working. Opt out with --no-aforge / AFORGE_MODE=none (sh) or -NoAforge /
+$env:AFORGE_MODE='none' (ps1; a piped `iwr | iex` cannot pass a switch, hence
+the env var).
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(desktop): ensure aforge on launch, once, without blocking startup
+
+A desktop-only install never runs the curl installer, so it would have had af
+and no harness. The app now shells out to `af aforge ensure` right after it
+resolves the CLI — no bundled payload, so there is one download path and the
+upgrade rules stay in Go.
+
+Deliberately not extraResources: bundling the binary would fork the install
+path and freeze the pinned version at package time, and the app would still
+need the runtime check for machines that already had an older copy.
+
+Shaped like tray-companion.ts: planAforge() is pure so the skip rules are unit
+tested, and the effect takes injected deps so no test ever spawns anything.
+Fire-and-forget with a once-per-launch latch set before the await, so a dead
+network delays nothing and two callers still produce one download.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(docker): ship aforge in the images that actually run agent nodes
+
+The cloud control plane (single-container topology), the python-agent image and
+the go-agent image all host agent nodes, and a node that reaches for a harness
+in a container without one fails at spawn. Dockerfile.control-plane is left
+alone: it is distroless, has no shell, and by construction runs agents
+elsewhere.
+
+Soft fetch, hard verify. The asset host goes live with the website deploy, so a
+404 has to degrade to "this image ships without aforge" rather than break every
+image build in the meantime — but a download that does land is always checked
+against the published sha256, taken after gunzip because checksums.txt hashes
+the uncompressed binary. A mismatch fails the build.
+
+The COPY takes the fetch stage's output DIRECTORY, not a fixed file path: when
+the fetch was skipped the directory is empty and the COPY is a no-op, instead
+of planting a zero-byte `aforge` on PATH that `af harness doctor` would
+cheerfully report as installed.
+
+aforge is a statically linked ELF, so the debian-built asset runs unchanged on
+the musl/alpine go-agent base.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* docs(aforge): point every install hint at `af aforge ensure`
+
+The Python SDK told users to `go build -o aforge ./cmd/aforge` from a private
+repo when a harness call failed — advice nobody could follow. It now names the
+command that actually exists on their machine.
+
+Also documents the two knobs the provisioner reads (AGENTFIELD_AFORGE_BASE_URL
+for mirrors, AGENTFIELD_SKIP_AFORGE for air-gapped hosts) and the shell
+installers' equivalents.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* test(aforge): cover the provisioner's failure paths
+
+CI's patch-coverage gate came in at 79.00% against an 80% floor — all of the
+misses were the error branches of the new code, which is exactly the code you
+want covered: a provisioner is mostly failure handling.
+
+Adds tests for the paths that were only reachable by breaking something: an
+unwritable bin directory (MkdirAll and flock failures), a `bin/aforge` path
+occupied by a directory so the atomic rename fails, a marker path likewise, a
+corrupt/truncated/non-gzip body, an unreachable host, a checksums file with
+malformed hex or no line for the asset, and every branch of home resolution.
+Also exercises the default GOOS/GOARCH path and asserts — via a fake
+RoundTripper rather than a real request — that the default base URL is the one
+actually dialled.
+
+internal/aforge: 78.0% → 95.5% of statements. No production code changed.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* chore(aforge): pin the installer to aforge v0.1.0 and require a real version from the doctor
+
+aforge-v2 cut its first semver release, so every surface that provisioned
+build-9b3ff482de3f now provisions v0.1.0: the pinned constant in
+control-plane/internal/aforge, the AFORGE_VERSION build arg in the cloud
+control-plane / python-agent / go-agent images, and the base-URL example in
+.env.example.
+
+The release also ships a real `version` subcommand (and `--version`), which
+retires the reason aforge was allowed to be "usable" without one. Drop the
+aforge-only VersionOptional allowance from the harness doctor: a binary that
+cannot name itself is now version_probe_failed and unusable, exactly like
+every other provider. VersionArgs still tries "version" before "--version",
+and a non-zero exit is still rejected so a usage banner never lands in the
+version field.
+
+The Docker fetch stays soft-fail on a 404 (hard-verify on a hit) — that is a
+separate documented follow-up, not this change.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (480342e)
+
 ## [0.1.130-rc.3] - 2026-08-17
 
 
