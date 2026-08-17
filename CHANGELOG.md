@@ -6,6 +6,108 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.130-rc.5] - 2026-08-17
+
+
+### Added
+
+- Feat(harness): make aforge the default provider across Python, Go, and TypeScript (#905)
+
+* feat(harness): add aforge do parity across SDKs
+
+* feat(harness): preserve TypeScript failure metadata
+
+* fix(harness): parse live aforge JSON envelopes
+
+* feat(harness): support aforge exec across SDKs
+
+* feat(harness): default aforge to exec
+
+* feat(harness): make aforge the default provider in the Python SDK
+
+`app.harness("...")` with nothing configured now runs AForge, AgentField's
+native coding harness, instead of raising "No harness provider specified".
+
+Provider precedence is explicit value > AGENTFIELD_HARNESS_PROVIDER >
+"aforge", implemented once in harness/_defaults.py and applied both where
+HarnessConfig materialises its default and where the runner resolves options
+(so a runner built without any config follows the same chain).
+
+HarnessConfig.model stops defaulting to "sonnet" — that was Claude-specific
+and wrong for every other provider. The default is now empty, meaning "use
+the provider's own default", and the claude-code provider carries "sonnet"
+internally so explicit claude-code users see no change.
+
+Also drops the private-repo build instruction from the aforge install hint;
+the binary ships alongside `af` and `af aforge ensure` (re)installs it.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(harness): make aforge the default provider in the Go SDK
+
+Runner.Run no longer errors on an empty Options.Provider. BuildProvider and
+Run both route the name through ResolveProviderName, which applies the same
+precedence as the Python SDK: explicit value > AGENTFIELD_HARNESS_PROVIDER >
+DefaultProvider ("aforge"). The resolved name is written back onto the
+options so error messages and provider construction see the real provider.
+
+Model stays empty by default and means "the provider's own default"; the
+Harness doc example no longer suggests a Claude-specific "sonnet".
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* docs(harness): lead with AForge as the default harness
+
+Rewrites the harness-providers lead so the zero-setup path is the headline:
+AForge is the default, `af aforge ensure` installs it alongside `af`, and
+picking Claude Code / Codex / Gemini CLI / OpenCode is an override of one
+option rather than a prerequisite. Documents the provider precedence chain
+(explicit > AGENTFIELD_HARNESS_PROVIDER > aforge) and that an unset model
+means the provider's own default.
+
+Drops the "go build -o aforge ./cmd/aforge" instruction — that repo is not
+public and is no longer how anyone gets the binary. Adds the grok row
+(Python SDK only) so the install table matches the supported provider set.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* docs(harness): correct the v2 design doc's "provider is required" rule
+
+The design doc still asserted that HarnessConfig.provider has no implicit
+default and that a call without one raises. Both are false now: provider
+resolves through explicit > AGENTFIELD_HARNESS_PROVIDER > "aforge", and
+model defaults to the provider's own rather than "sonnet".
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(harness): make aforge the default provider in the TypeScript SDK
+
+HarnessRunner.run no longer throws when nothing sets a provider. Both the
+runner and buildProvider route the name through resolveProviderName, which
+applies the same precedence as the Python and Go SDKs: explicit value >
+AGENTFIELD_HARNESS_PROVIDER > DEFAULT_HARNESS_PROVIDER ("aforge"). The
+resolved name is written back onto the options so providers and error
+messages see the real provider.
+
+HarnessConfig.provider becomes optional to match, so `{}` is a complete
+config.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(harness): stop pointing users at a private repo to get aforge
+
+The Go and TypeScript adapters told anyone hitting a missing binary to
+"Build it from https://github.com/Agent-Field/aforge-v2" — a repo they
+cannot open. AForge ships with `af`, so the message now names
+`af aforge ensure` and the AFORGE_BIN escape hatch, matching the Python
+install hint.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (6b8c9be)
+
 ## [0.1.130-rc.4] - 2026-08-17
 
 
