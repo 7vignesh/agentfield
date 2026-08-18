@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.131-rc.1] - 2026-08-18
+
+
+### Fixed
+
+- Fix(sdk/go): attribute default-provider harness runs to aforge, prefer result.Model (#929)
+
+Since v0.1.130 the harness provider is optional (env AGENTFIELD_HARNESS_PROVIDER,
+else aforge). recordHarnessUsage still derived the `harness` column only from
+opts.Provider / HarnessConfig.Provider, so a default-provider run was recorded
+as harness="" and model="harness". Resolve the effective provider through
+harness.ResolveProviderName (same precedence the runner uses) and let the
+provider-reported result.Model win over the configured model, mirroring the
+Python fix in #928.
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (937641a)
+
 ## [0.1.130] - 2026-08-18
 
 ## [0.1.130-rc.6] - 2026-08-18
