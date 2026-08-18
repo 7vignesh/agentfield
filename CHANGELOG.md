@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.132-rc.1] - 2026-08-18
+
+
+### Fixed
+
+- Fix(sdk/typescript): honour AGENTFIELD_SERVER for the default control-plane URL (#934)
+
+The TS SDK hardcoded http://localhost:8080 in three places and never read
+the environment, so nodes launched by `af run` / docker compose with
+AGENTFIELD_SERVER set registered against localhost. Resolve like Python:
+explicit agentFieldUrl > AGENTFIELD_SERVER > AGENTFIELD_SERVER_URL >
+localhost:8080, from one helper used by all three sites.
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com>
+Co-authored-by: Santosh kumar <29346072+santoshkumarradha@users.noreply.github.com> (513dd64)
+
 ## [0.1.131] - 2026-08-18
 
 ## [0.1.131-rc.3] - 2026-08-18
