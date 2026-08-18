@@ -6,6 +6,157 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.130-rc.6] - 2026-08-18
+
+
+### Documentation
+
+- Docs: feature Person to Brief AF (#912) (bc290a4)
+
+
+
+### Fixed
+
+- Fix(harness): attribute default-provider runs to aforge, set HarnessResult.model, pass max_turns to aforge (#928)
+
+* fix(sdk/python): attribute default-provider harness runs to aforge
+
+`_record_harness_usage` resolved the provider from `self.harness_config`,
+which is None unless the caller built a HarnessConfig explicitly. On the
+default path that left the cost entry with harness=None and model="harness"
+even though aforge is what actually ran — the entries were unattributable.
+
+Resolve through `agentfield.harness._defaults.resolve_harness_provider`
+instead, which is the same precedence the runner uses to pick a provider:
+explicit value > AGENTFIELD_HARNESS_PROVIDER > "aforge". Explicit and
+configured providers keep winning; only the previously-empty case changes.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(harness): report the model aforge actually ran on every result
+
+The aforge providers only reported a model when the caller pinned one, so
+the default path — now the common one — produced results with no model at
+all. Go had no model field on Metrics/Result to report through in the first
+place.
+
+Report the effective model: the resolved caller model when given, else
+AFORGE_MODEL as it stands in the final env overlay (caller-supplied env
+wins), else aforge's own built-in default, pinned as a named constant per
+SDK. Go gains Metrics.Model and Result.Model, mirroring the Python SDK, with
+the same first-non-empty-wins aggregation across retries.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(harness): pass max_turns through to aforge as --turns
+
+The aforge providers dropped the caller's turn cap, so a run asking for two
+turns got aforge's 200-turn runaway backstop instead. With aforge as the
+default provider that is now the ordinary path, not a corner case.
+
+Map a positive turn cap onto `--turns N`, right after `--timeout`, on the
+`exec` argv only — `aforge do` has no such flag and would fail to parse it.
+Cost caps stay unmapped on purpose: aforge's `--budget` counts tokens, not
+dollars, so there is no honest conversion from max_budget_usd.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (ca88757)
+
+- Fix(harness): staging installs put aforge beside af; doctor exits 0 on a survey; doctor knows grok (#927)
+
+* fix(install): install aforge beside af on the staging channel
+
+The staging channel installs af into ~/.agentfield-staging/bin and adds only
+that directory to PATH, but install_aforge() delegates to `af aforge ensure`,
+which installs into $AGENTFIELD_HOME/bin — ~/.agentfield/bin by default. So a
+staging install downloaded aforge into a directory it never put on PATH, and
+the SDK's "run af aforge ensure" remedy could not fix it either, because the
+remedy resolves the same default home.
+
+Pin AGENTFIELD_HOME to the parent of INSTALL_DIR for the ensure call so aforge
+always lands beside the af that installed it. Production is unchanged:
+~/.agentfield/bin strips to ~/.agentfield, which is what ensure already
+defaulted to. install.ps1 has the same split whenever AGENTFIELD_INSTALL_DIR is
+set, so Install-Aforge pins and restores the variable the same way.
+
+--no-aforge / AFORGE_MODE=none is untouched: ensure is still never invoked.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(cli): `af harness doctor` exits 0 when it is a survey
+
+Without --provider the command surveys the machine, but it still returned
+"requested harness provider is unavailable: <first missing>" for the first
+provider it could not use. A healthy fresh install that simply has not
+installed every coding harness therefore exited 1, and the message was printed
+three times: cobra's own copy, the AgentHintJSON "invalid_command" blob from
+main.go, and the zerolog error line.
+
+A bare doctor is informational — a machine legitimately has providers it has
+not installed — so the unusable gate now applies only when the caller named
+providers explicitly. When it does fire it returns cliExitError, which makes
+main.go print the plain message instead of the invalid_command blob (the
+command was invoked correctly), and SilenceErrors/SilenceUsage on the
+subcommand drops cobra's duplicate. `--provider unknown` is untouched: that
+really is a mis-invocation, so the agent hint stays.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(cli): teach `af harness doctor` about the grok provider
+
+The Python SDK ships a grok entry in PROVIDER_SPECS
+(sdk/python/agentfield/harness/_availability.py), so an agent can be asked to
+run it, but the Go doctor's provider table did not list it: `af harness doctor`
+silently omitted grok and `--provider grok` was rejected as an unknown
+provider. Add the row and list it in the flag's help text, plus a test that
+pins the two lists to the same provider-name set so they cannot drift again.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (7f88434)
+
+- Fix(install): make --no-aforge / AFORGE_MODE=none actually skip the aforge download (#926)
+
+The installer only skipped its own explicit `af aforge ensure` step, but
+`af skill install --all` (which runs first) triggers the same best-effort
+aforge provisioning hook (skillkit/install.go), so a user who opted out
+still got the 35 MB binary downloaded into ~/.agentfield/bin. Regressed
+with #924, which added both the hook and the flag.
+
+Export AGENTFIELD_SKIP_AFORGE=1 for the whole run when AFORGE_MODE=none —
+that env gate is the single switch the Go side honours — so every `af`
+(and af-tray) invocation the script makes respects the opt-out.
+
+Verified against v0.1.130-rc.5 into an isolated HOME: patched installer
+with --no-aforge installs af + skills + furrow and no aforge; the
+unpatched script installs aforge despite the flag.
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (4930075)
+
+- Fix(sdk/python): exclude litellm 1.97.0, which crashes on Python 3.10 (#925)
+
+litellm 1.97.0 (PyPI 2026-08-16) fails while constructing ModelResponse on
+Python 3.10 with pydantic 2.13:
+
+    PydanticUserError: `Message` is not fully defined; you should define
+    all referenced types, then call `Message.model_rebuild()`
+
+(BerriAI/litellm#36384). The SDK declares a bare `litellm` dependency, so a
+fresh `pip install agentfield` on 3.10 — a version we support and test —
+resolves to 1.97.0 and every `app.ai()` call dies inside
+`litellm.completion()` before reaching any provider. Verified standalone:
+1.97.0 breaks on 3.10, works on 3.11/3.12; 1.96.2 works on 3.10.
+
+Exclude just that release so pip resolves 1.96.2 (or a fixed 1.97.x+) and
+the docs quickstart works again on a clean install.
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (b149cfd)
+
 ## [0.1.130-rc.5] - 2026-08-17
 
 
