@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.131-rc.3] - 2026-08-18
+
+
+### Fixed
+
+- Fix(sdk): send X-OpenRouter-Categories on OpenRouter requests (#930)
+
+All three SDKs now attach X-OpenRouter-Categories=cli-agent,programming-app
+on OpenRouter traffic, matching the control-plane defaults, with the same
+AGENTFIELD_OPENROUTER_CATEGORIES / OR_CATEGORIES env override chain used
+for site URL and app name.
+
+Co-authored-by: Cursor Agent <cursoragent@cursor.com>
+Co-authored-by: Santosh kumar <santoshkumarradha@users.noreply.github.com> (5718a25)
+
 ## [0.1.131-rc.2] - 2026-08-18
 
 
