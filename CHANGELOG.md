@@ -6,6 +6,45 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.132-rc.2] - 2026-08-20
+
+
+### Fixed
+
+- Fix(install): disable VCS stamping when building Go agent nodes (#938)
+
+* fix(install): disable VCS stamping when building Go agent nodes
+
+The installed package copy under ~/.agentfield/packages is not a git
+checkout, so there is nothing truthful for go build's -buildvcs to stamp.
+Worse, the go tool's VCS auto-detection walks up PAST the package root:
+a .git anywhere above the packages dir — a dotfiles-managed $HOME, a
+stray /tmp/.git — either hard-fails the install with
+"error obtaining VCS status: exit status 128" or stamps an unrelated
+repository's revision into the node binary.
+
+Found live: a stock 'af install https://github.com/Agent-Field/sec-af'
+(and cloudsecurity-af) failed at the go-build step on a machine with an
+empty /tmp/.git directory. The regression test reproduces exactly that
+layout with the real toolchain and fails without the flag.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* test(templates): make the scaffold-build test immune to parent VCS state
+
+TestRenderedGoScaffoldBuilds runs a plain 'go build' inside t.TempDir(),
+so the same walk-up VCS detection fixed in InstallGoDependencies could
+fail this test for reasons unrelated to the template (reproduced on a
+machine with a stray /tmp/.git). Build the rendered scaffold with
+-buildvcs=false, mirroring what the installer now does with that same
+scaffold.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (eb522f7)
+
 ## [0.1.132-rc.1] - 2026-08-18
 
 
