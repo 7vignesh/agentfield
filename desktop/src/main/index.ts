@@ -1,7 +1,8 @@
 import { join, resolve } from 'node:path'
 import { existsSync } from 'node:fs'
-import { BrowserWindow, Menu, app, ipcMain, nativeTheme, safeStorage, shell } from 'electron'
+import { BrowserWindow, Menu, Notification, app, ipcMain, nativeTheme, safeStorage, shell } from 'electron'
 import { CATALOG } from '../shared/catalog'
+import { BUNDLED_NODES } from '../shared/bundled'
 import { RAILWAY_TEMPLATE_URL } from '../shared/cloudLinks'
 import { DEEP_LINK_SCHEME, type View, deepLinkFromArgv, parseDeepLink } from '../shared/deeplink'
 import type { DesktopSettings } from '../shared/types'
@@ -9,11 +10,14 @@ import { getBaseUrl, getSnapshot, setActiveControlPlanePort } from './agentfield
 import { type AgentAction, runAgentAction, startControlPlane, uninstallAgent } from './agents'
 import { ensureAforgeCompanion } from './aforge-companion'
 import { runAutostart } from './autostart'
+import { bundledStatuses, ensureBundledAgents } from './bundledAgents'
 import { testCloudConnection, applyConnectionProfile } from './cloud'
 import { isCloudActive } from './connection'
-import { initializeCli, installBundledCli, refreshCliStatus } from './cli'
+import { createCpClient } from './cpClient'
+import { getCliCommand, initializeCli, installBundledCli, refreshCliStatus } from './cli'
 import { initUserPath } from './env'
 import { installAgent, installFromSource, updateAgent } from './installer'
+import { notifyUnresolvedKeys } from './keyNotice'
 import {
   getEnvReports,
   listStoredSecrets,
@@ -197,7 +201,43 @@ function registerDeepLinks(): void {
   }
 }
 
+/**
+ * The one install mutex for the whole app: the IPC handlers below and
+ * first-launch bundled provisioning both go through it, because the control
+ * plane answers a second concurrent install with a 409.
+ *
+ * The two callers want different things when it is taken. A handler is
+ * answering a click, so it refuses straight away and the renderer says so.
+ * Provisioning is background work nobody is watching, so it waits its turn
+ * instead of failing a bundled node over a coincidence of timing.
+ */
 let installInFlight = false
+/** Provisioning calls parked until the current install finishes, in order. */
+const installWaiters: Array<() => void> = []
+
+/** Take the mutex, waiting when it is held. Used by provisioning only. */
+function acquireInstall(): Promise<void> {
+  if (!installInFlight) {
+    installInFlight = true
+    return Promise.resolve()
+  }
+  return new Promise((resolve) => installWaiters.push(resolve))
+}
+
+/**
+ * Release the mutex. A parked waiter is handed the lock directly — the flag
+ * stays set across the handoff, so a handler can never slip in during the
+ * microtask it takes the waiter to resume.
+ */
+function releaseInstall(): void {
+  const next = installWaiters.shift()
+  if (next) {
+    next()
+    return
+  }
+  installInFlight = false
+}
+
 let cloudDeployInFlight = false
 let settings: DesktopSettings
 
@@ -291,6 +331,107 @@ function syncSkills(reason: string): void {
   })
 }
 
+/**
+ * Install the nodes that ship with the app (see shared/bundled.ts) on the
+ * first launch that can reach a control plane. They are not marketplace rows:
+ * the app fetches them through the same install API, then shows them in the
+ * Agents view, so a brand-new user has a working software factory without
+ * choosing anything.
+ *
+ * Called from the boot chain AFTER runAutostart resolves — installing needs a
+ * live control plane, and autostart is what adopts or starts one. Best-effort
+ * throughout: ensureBundledAgents never rejects, and a node that fails is left
+ * unrecorded so the next launch retries it.
+ */
+async function provisionBundledAgents(): Promise<void> {
+  // One snapshot answers both questions the plan needs: which nodes are
+  // already installed, and whether the control plane we just booted actually
+  // answered as an AgentField. It is read here rather than before autostart
+  // because the active port may have moved (adopted, or freshly picked).
+  const snapshot = await getSnapshot()
+  // What this run actually installed, collected from onInstalled below —
+  // ensureBundledAgents plans internally and reports nothing back, and the
+  // key notice must speak only for the nodes that just arrived.
+  const justProvisioned: string[] = []
+  await ensureBundledAgents(
+    {
+      installed: snapshot.registry.agents.map((agent) => agent.name),
+      provisioned: settings.provisionedBundled,
+      skipEnv: process.env.AGENTFIELD_SKIP_BUNDLED,
+      cliCommand: getCliCommand(),
+      cloudActive: isCloudActive(),
+      // recognized, not reachable: an unrelated service holding the port
+      // would answer, and installing through it would fail every time.
+      controlPlaneReachable: snapshot.controlPlane.recognized,
+      registryReadable: snapshot.registry.exists && !snapshot.registry.error
+    },
+    {
+      // Shares the app-wide install mutex, waiting when the user started an
+      // install of their own — see acquireInstall/releaseInstall.
+      install: async (name, onLine) => {
+        await acquireInstall()
+        try {
+          return await installAgent(name, onLine)
+        } finally {
+          releaseInstall()
+        }
+      },
+      // Remember the node was provisioned so it is never auto-installed
+      // again: uninstalling a bundled node has to stick across launches.
+      markProvisioned: async (name) => {
+        settings = mergeSettings(settings, {
+          provisionedBundled: [...settings.provisionedBundled, name]
+        })
+        await saveSettings(settingsFile(), settings)
+      },
+      hasInstallApi: () => createCpClient().hasInstallApi(),
+      // Start it from the NEXT launch on, not now. Both bundled nodes need an
+      // API key the first-launch user has not entered yet, so starting one
+      // here would only produce a dead node and an alarming badge; the Agents
+      // row's "Needs keys" chip is the affordance that actually helps.
+      onInstalled: async (name) => {
+        justProvisioned.push(name)
+        settings = mergeSettings(settings, {
+          autostartAgents: [...settings.autostartAgents, name]
+        })
+        await saveSettings(settingsFile(), settings)
+      },
+      // bundledAgents.ts already prefixes every line with "bundled: " — the
+      // module owns its own log voice, the way autostart.ts does.
+      log: (message) => console.log(message)
+    }
+  )
+
+  // Nothing was started above, on purpose — both bundled nodes need an API key
+  // the first-launch user has not entered. On a login-item launch the app is
+  // hidden in the tray, so the Agents row's "Needs keys" chip is telling an
+  // empty room. One OS notification is the only thing that reaches the user
+  // here. keyNotice.ts decides; this is just the Electron effect.
+  await notifyUnresolvedKeys(justProvisioned, settings.keyNoticeShown, {
+    // The one authoritative source: composed from the control plane's
+    // per-agent secrets endpoint, i.e. the encrypted store `af run` reads.
+    reports: () => getEnvReports(),
+    supported: () => Notification.isSupported(),
+    show: ({ title, body }) => {
+      const notice = new Notification({ title, body })
+      // The notice names keys; the Keys editor lives on the Agents rows, so
+      // that is where a click has to land. navigate() also un-hides the
+      // window, which is the whole point on a tray-only launch.
+      notice.on('click', () => navigate('agents'))
+      notice.show()
+    },
+    // The at-most-once latch: an announced name is persisted, and keyNotice.ts
+    // filters on it, so no launch can raise the same notice twice.
+    markNotified: async (agents) => {
+      settings = mergeSettings(settings, {
+        keyNoticeShown: [...settings.keyNoticeShown, ...agents]
+      })
+      await saveSettings(settingsFile(), settings)
+    },
+    log: (message) => console.log(message)
+  })
+}
+
 // Register (or clear) the OS login item. Dev builds skip it — registering
 // electron.exe as a login item would be wrong and confusing.
 function applyLoginItem(next: DesktopSettings): void {
@@ -370,8 +511,14 @@ function main(): void {
     // The snapshot carries the last skill-sync result along with the control-
     // plane view, so the renderer's existing 5s poll keeps the dashboard's
     // skill state honest without a channel (or a loop) of its own.
-    ipcMain.handle('agentfield:snapshot', () => getSnapshot({ skillSync: skillSync.last() }))
-    ipcMain.handle('agentfield:catalog', () => CATALOG)
+    // The snapshot also carries the bundled-node provisioning rows, so the
+    // Agents view can show the two nodes arriving on a first launch off the
+    // poll it already runs.
+    ipcMain.handle('agentfield:snapshot', () =>
+      getSnapshot({ skillSync: skillSync.last(), bundled: bundledStatuses() })
+    )
+    // Bundled nodes stay listed so an uninstalled one can be reinstalled from the curated UI.
+    ipcMain.handle('agentfield:catalog', () => [...BUNDLED_NODES, ...CATALOG])
     ipcMain.handle('agentfield:install', async (event, name: unknown) => {
       if (typeof name !== 'string') {
         return { ok: false, message: 'invalid install request' }
@@ -387,7 +534,7 @@ function main(): void {
           }
         })
       } finally {
-        installInFlight = false
+        releaseInstall()
       }
     })
     // Install from a pasted GitHub repo URL. Shares the SAME install mutex and
@@ -410,7 +557,7 @@ function main(): void {
           }
         })
       } finally {
-        installInFlight = false
+        releaseInstall()
       }
     })
     ipcMain.handle('agentfield:uninstall', (_event, name: unknown) => {
@@ -436,7 +583,7 @@ function main(): void {
           }
         })
       } finally {
-        installInFlight = false
+        releaseInstall()
       }
     })
     ipcMain.handle('agentfield:agent-action', (_event, action: unknown, name: unknown) => {
@@ -667,16 +814,23 @@ function main(): void {
     // The port autostart ends up on (adopted or freshly picked) is persisted
     // so the next app start finds this control plane again instead of
     // spawning a second one somewhere else.
-    void userPathReady.finally(() =>
-      runAutostart(
-        settings,
-        (message) => console.log(message),
-        async (port) => {
-          settings = mergeSettings(settings, { lastControlPlanePort: port })
-          await saveSettings(settingsFile(), settings)
-        }
-      ).catch((err) => console.error('autostart failed:', err))
-    )
+    //
+    // Bundled-node provisioning is chained onto the SAME promise rather than
+    // started beside it: it installs through the control plane, so it has to
+    // wait for the one autostart adopted or brought up.
+    void userPathReady
+      .finally(() =>
+        runAutostart(
+          settings,
+          (message) => console.log(message),
+          async (port) => {
+            settings = mergeSettings(settings, { lastControlPlanePort: port })
+            await saveSettings(settingsFile(), settings)
+          }
+        ).catch((err) => console.error('autostart failed:', err))
+      )
+      .then(() => provisionBundledAgents())
+      .catch((err) => console.error('bundled provisioning failed:', err))
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow()

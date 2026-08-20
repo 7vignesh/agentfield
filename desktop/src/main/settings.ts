@@ -15,11 +15,13 @@ export const DEFAULT_SETTINGS: DesktopSettings = {
   localApiKey: '',
   lastControlPlanePort: null,
   autostartAgents: [],
+  provisionedBundled: [],
   installSkills: true,
   trayCompanion: true,
   dismissedUpdateVersion: null,
   starPrompt: 'pending',
-  starPromptSnoozedUntil: null
+  starPromptSnoozedUntil: null,
+  keyNoticeShown: []
 }
 
 /** A usable TCP port, or null for anything else (auto mode / not recorded). */
@@ -43,6 +45,16 @@ export function normalizeSettings(raw: unknown): DesktopSettings {
   const agents = Array.isArray(obj.autostartAgents)
     ? [...new Set(obj.autostartAgents.filter((n): n is string => typeof n === 'string'))]
     : DEFAULT_SETTINGS.autostartAgents
+  // Same coercion as autostartAgents: a hand-edited or corrupt list must not
+  // be able to suppress (or duplicate) first-launch provisioning.
+  const provisionedBundled = Array.isArray(obj.provisionedBundled)
+    ? [...new Set(obj.provisionedBundled.filter((n): n is string => typeof n === 'string'))]
+    : DEFAULT_SETTINGS.provisionedBundled
+  // Same again for the once-only key notice: a corrupt list must neither
+  // suppress the notification forever nor grow duplicates.
+  const keyNoticeShown = Array.isArray(obj.keyNoticeShown)
+    ? [...new Set(obj.keyNoticeShown.filter((n): n is string => typeof n === 'string'))]
+    : DEFAULT_SETTINGS.keyNoticeShown
   return {
     cloud: {
       enabled: Boolean(cloud.enabled),
@@ -63,6 +75,7 @@ export function normalizeSettings(raw: unknown): DesktopSettings {
     localApiKey: typeof obj.localApiKey === 'string' ? obj.localApiKey.trim() : '',
     lastControlPlanePort: normalizePort(obj.lastControlPlanePort),
     autostartAgents: agents,
+    provisionedBundled,
     installSkills:
       typeof obj.installSkills === 'boolean' ? obj.installSkills : DEFAULT_SETTINGS.installSkills,
     trayCompanion:
@@ -77,7 +90,8 @@ export function normalizeSettings(raw: unknown): DesktopSettings {
       obj.starPromptSnoozedUntil !== '' &&
       Number.isFinite(Date.parse(obj.starPromptSnoozedUntil))
         ? obj.starPromptSnoozedUntil
-        : null
+        : null,
+    keyNoticeShown
   }
 }
 

@@ -1,6 +1,7 @@
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import type { BundledStatus } from '../shared/types'
 import type { CpClient, PackageInfo } from './cpClient'
 import {
   DEFAULT_BASE_URL,
@@ -19,6 +20,7 @@ import {
 } from './agentfield'
 import { DEFAULT_CONTROL_PLANE_PORT } from './ports'
 import { installCommand, sanitizeInstallOutput } from './installer'
+import { BUNDLED_NODES } from '../shared/bundled'
 import { CATALOG, catalogEntry } from '../shared/catalog'
 import { setCloudConnection, setLocalApiKey } from './connection'
 
@@ -566,19 +568,25 @@ describe('install catalog', () => {
   // A repo that ships both a Python node and its Go counterpart is offered as
   // a single install, named for the product and sourced at the bare repo URL —
   // the root manifest's `superseded_by:` redirect decides which node lands and
-  // carries an existing install across. A second row for the same repo, or the
-  // old implementation-suffixed name creeping back in, must fail here rather
-  // than quietly reappear in the Install view.
+  // carries an existing install across. Both such products now SHIP WITH the
+  // app (shared/bundled.ts) and are provisioned on first launch, so the
+  // invariant lives there now: a second entry for the same repo, the old
+  // implementation-suffixed name creeping back in, or either product
+  // reappearing as a marketplace card must fail here rather than quietly
+  // return to the Install view.
   it.each([
     { repo: 'Agent-Field/SWE-AF', name: 'swe-planner', retired: 'swe-planner-go' },
     { repo: 'Agent-Field/pr-af', name: 'pr-af', retired: 'pr-af-go' }
-  ])('offers $name as one product-named entry sourced at the bare repo', (tc) => {
-    const entries = CATALOG.filter((e) => e.source.includes(tc.repo))
+  ])('ships $name as one product-named bundled node sourced at the bare repo', (tc) => {
+    const entries = BUNDLED_NODES.filter((e) => e.source.includes(tc.repo))
     expect(entries).toHaveLength(1)
     expect(entries[0].name).toBe(tc.name)
     expect(entries[0].source).toBe(`https://github.com/${tc.repo}`)
     expect(entries[0].language).toBe('go')
-    expect(CATALOG.map((e) => e.name)).not.toContain(tc.retired)
+    expect([...CATALOG, ...BUNDLED_NODES].map((e) => e.name)).not.toContain(tc.retired)
+    expect(CATALOG.map((e) => e.name)).not.toContain(tc.name)
+    // Still installable and --force updatable from the Agents view.
+    expect(catalogEntry(tc.name)).toEqual(entries[0])
   })
 })
 
@@ -729,6 +737,29 @@ describe('getSnapshot', () => {
     // Usage is only fetched against a recognized control plane.
     expect(snapshot.usage).toBeNull()
     expect(requested.some((url) => url.includes('/usage/stats'))).toBe(false)
+  })
+
+  // Bundled provisioning rows are main-process state (main/bundledAgents.ts),
+  // so getSnapshot only passes them through — same contract as skillSync.
+  it('carries the bundled provisioning rows, defaulting to none', async () => {
+    const fetchImpl: FetchLike = async () => {
+      throw new TypeError('fetch failed')
+    }
+    const bundled: BundledStatus[] = [
+      {
+        name: 'swe-planner',
+        description: 'Software factory',
+        language: 'go',
+        phase: 'installing',
+        message: 'Cloning…'
+      }
+    ]
+
+    const without = await getSnapshot({ cpClient: packagesClient(), fetchImpl })
+    expect(without.bundled).toEqual([])
+
+    const with_ = await getSnapshot({ cpClient: packagesClient(), fetchImpl, bundled })
+    expect(with_.bundled).toEqual(bundled)
   })
 
   it('reports an unreachable control plane and an absent registry gracefully', async () => {

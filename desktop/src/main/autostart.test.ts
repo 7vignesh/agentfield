@@ -61,11 +61,13 @@ function settings(overrides: Partial<DesktopSettings>): DesktopSettings {
     localApiKey: '',
     lastControlPlanePort: null,
     autostartAgents: [],
+    provisionedBundled: [],
     installSkills: true,
     trayCompanion: true,
     dismissedUpdateVersion: null,
     starPrompt: 'pending',
     starPromptSnoozedUntil: null,
+    keyNoticeShown: [],
     ...overrides
   }
 }
