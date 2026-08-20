@@ -6,6 +6,376 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.132-rc.3] - 2026-08-20
+
+
+### Other
+
+- Ship the desktop app with bundled agent nodes, missing-key surfacing, and the offload-by-default skill (#937)
+
+* docs(desktop): document bundled agent nodes and first-launch provisioning
+
+Explain what ships with the app, why delivery is fetch-on-first-launch rather
+than a payload in the DMG, why the bundled nodes are named at their bare repo
+URL (the superseded_by redirect is what migrates an existing Python node), and
+the three rules that make provisioning safe to run on every launch: uninstall
+sticks, failure retries, nothing is auto-started into a guaranteed missing-keys
+failure.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+* feat(desktop): ship swe-planner and pr-af as bundled nodes
+
+The two flagship nodes stop being marketplace cards and become nodes that
+ship with the app: shared/bundled.ts lists them, and main/bundledAgents.ts
+provisions them on first launch through the existing control-plane install
+API (fetch on first launch, so no packaging changes).
+
+- shared/bundled.ts: BUNDLED_NODES / isBundled / bundledEntry, sourced at
+  the bare repo URL so each root manifest's superseded_by redirect still
+  migrates a user who has the older Python node.
+- shared/catalog.ts: CATALOG keeps only sec-af and cloudsecurity-af;
+  catalogEntry() now resolves over CATALOG + BUNDLED_NODES, which keeps a
+  bundled node installable and --force updatable from the Agents view
+  without widening the "renderer only passes a vetted name" boundary.
+- shared/types.ts: BundledPhase / BundledStatus, snapshot.bundled, and
+  settings.provisionedBundled.
+- main/settings.ts: provisionedBundled defaults to [] and is coerced like
+  autostartAgents, so uninstalling a bundled node sticks across launches.
+- main/bundledAgents.ts: pure planBundledInstalls() plus a sequential,
+  never-throwing ensureBundledAgents() driven by injected deps; failures
+  stay visible as rows and are not recorded, so the next launch retries.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+* feat(desktop): provision bundled agent nodes on first launch
+
+Wire the main process for the two nodes that ship with the app
+(swe-planner, pr-af): they are fetched through the existing install API
+after autostart has a control plane, instead of sitting in the
+marketplace grid.
+
+- getSnapshot() carries `bundled`, threaded through SnapshotOptions the
+  same way the skillSync extra is, so the renderer's existing 5s poll
+  delivers the provisioning rows with no new IPC channel.
+- Provisioning is chained onto the userPathReady/runAutostart promise
+  rather than started beside it — installing needs the control plane
+  autostart adopted or brought up.
+- installInFlight becomes a real mutex with a waiter queue: IPC handlers
+  still refuse a concurrent install outright (a click deserves an
+  answer), while provisioning parks and takes its turn.
+- markProvisioned records the node in settings so an uninstall sticks
+  across launches; onInstalled adds it to autostartAgents rather than
+  starting it now, because both nodes need API keys a first-launch user
+  has not entered yet.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+* feat(desktop): show bundled agent provisioning in the Agents view
+
+First launch fetches swe-planner and pr-af through the control-plane
+install API, so the Agents library must show them arriving instead of
+an empty panel or the marketplace.
+
+- AgentsPanel takes `bundled: BundledStatus[]` and renders those nodes
+  above the installed rows: name, provisioning badge, description, and
+  the streamed message as the row progress line (`.error-text` when the
+  install failed). The rows are inert — nothing to start or configure
+  until the install lands — and fade in/out per DESIGN.md §5.2.
+- The "No agents installed" empty state stays away while a bundled node
+  is still provisioning; that library is unfinished, not empty.
+- App passes `snapshot.bundled` through, keeps `libraryEmpty` false
+  while any bundled row exists, and routes a cold launch to the Agents
+  library when nodes are arriving (add-mode only when nothing is
+  installed and nothing is coming).
+- `.badge.provisioning` uses the accent tint from the shared tokens:
+  mid-install is calm progress, not a fault.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+* fix(desktop): drop the duplicate bundled log prefix
+
+bundledAgents.ts already prefixes each line; index.ts prefixing again produced
+"bundled: bundled: …".
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+* docs(skill): make a missing agent key a blocking handoff in agentfield-use
+
+An installed-but-unstarted node is the default first-run state: the desktop
+app ships swe-planner and pr-af pre-provisioned but deliberately not started,
+because their API keys are not entered yet. A coding agent driven by this
+skill then saw only HTTP 400 `agent 'X' not found` (or the MCP `target ... not
+found` text), never learned the real cause, and retried or silently
+substituted a different approach.
+
+Bump agentfield-use to 0.7.0 and make the recovery path explicit:
+
+- Start before dispatch. If a node is in `af list` but absent from discovery,
+  or its health_status is not active, run `af run <name>` first. That start
+  attempt is the diagnostic: it reads the encrypted store that actually gates
+  startup and names the exact missing variable.
+- Missing key is a blocking handoff. Name the variable(s) and the verbatim
+  `af secrets set ... --node <name>` command, point at Desktop -> Agents ->
+  <node> -> Keys, then wait. Never retry, never substitute another agent,
+  never do the work silently instead, never ask for the value in chat.
+  Consistent with the agentfield-personal handoff convention.
+- Warn off the store-blind commands. `af doctor` reads os.Getenv and
+  `af config <pkg> --list` reads the package .env, so both report a
+  correctly-stored key as unset and neither renders require_one_of groups.
+- Extend the failure table with the actually-observed 400 body
+  (error_category: internal_error, not 404) and the MCP not-found text, both
+  routed to the same recovery.
+
+Adds a contract test pinning the new text, bumps the catalog version pins,
+and syncs the embedded skill_data mirror.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+* feat(desktop): warn on the top bar when installed agents need keys
+
+The bundled nodes are installed but never started, because both want API
+keys a first-launch user has not entered. Until now the only signal was
+the per-row "Needs keys" chip — invisible to someone who never opens the
+app and then asks a coding agent to review a PR.
+
+KeysBanner rides the existing banner slot and reads getEnvReports, the
+only store-aware source of truth (`af doctor` and .env are store-blind).
+The unreachable-control-plane sentinel and the metadata-blind
+`satisfied: true` fallback both stay silent, so the banner cannot cry
+wolf. It is not dismissible: unlike the update offer, this reports that
+the product cannot work, and it clears itself the moment keys resolve.
+
+Refresh is event-driven, not a second timer — reload on mount, on agent
+roster changes, and on view changes.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+* fix(desktop): keep the star prompt from stacking under the keys banner
+
+StarBanner already yields to an undismissed app update; it knew nothing about
+the keys banner, so a first launch could show both — asking for a GitHub star
+directly under a strip saying the installed agents cannot run.
+
+KeysBanner reports its visibility upward and App carries the signal across,
+rather than StarBanner re-deriving it: getEnvReports fans out to the control
+plane per package, and one caller is enough.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+* feat(desktop): notify once when bundled agents land without their keys
+
+First-launch provisioning installs swe-planner and pr-af and deliberately
+does not start them, because both need an API key the user has not entered.
+On a login-item launch the app is hidden in the tray, so the Agents row's
+"Needs keys" chip is telling an empty room — the user finds out when a
+coding agent fails to call them.
+
+main/keyNotice.ts closes that loop with one native notification, in the
+planner/runner shape of aforge-companion.ts and bundledAgents.ts:
+planKeyNotice() is pure and unit-tested (which agents, notify or not, given
+the env reports and what was already announced), and the Electron
+Notification is a thin injected effect in index.ts. Clicking it opens the
+app on the Agents view.
+
+The verdict comes only from getEnvReports().satisfied — the control plane's
+per-agent secrets endpoint, i.e. the encrypted store `af run` actually
+reads — so a correctly stored key never triggers a notice, and the
+deliberate satisfied: true fallback for control planes too old to report
+requirement metadata is never notified on.
+
+At-most-once is a new settings.keyNoticeShown list, the provisionedBundled
+precedent: announced names are persisted and filtered out, so the notice
+belongs to the provisioning event and no launch can raise it twice.
+Notification.isSupported() is checked, nothing throws, and nothing here can
+delay or break startup.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+* docs(desktop): document the three missing-key surfaces
+
+Provisioning installs the bundled nodes without starting them, so the README's
+"Nothing is started" needed the other half: how the user finds out a key is
+missing. Records why there are three surfaces (hidden-at-login, in-window, and
+coding-agent) and which single source of truth they all read — plus the warning
+that af doctor and af config --list are store-blind.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+* feat(skills): rewrite agentfield-use around offloading (0.8.0)
+
+Installed AgentField agents are subharnesses: workers a coding harness
+offloads to instead of doing the work inline. They run on smaller open
+models, in parallel, off the harness's own context, and every run is
+recorded on the control plane.
+
+The doctrine now leads the skill:
+
+- Offload by default. Coverage decides, not task size, and the fleet is
+  discovered at runtime rather than enumerated here — users install new
+  subharnesses at any time. One `af ls -e` answers "does anything cover
+  this?", cached per session.
+- Announce every offload with the run's live UI link
+  (<server>/ui/runs/<run_id>), which is for the user to watch in
+  parallel, never a substitute for the harness's own monitoring.
+- The user can always override; a failed or stalled run is reported and
+  asked about, never silently redone inline and presented as the
+  subharness's work.
+- Vocabulary rule: `agent`/`reasoner`/`node` in commands and fields,
+  "subharness" in what the harness says to its user.
+
+The golden path is now CLI-first and async: `af call --schema` →
+`af call --in … --async` (client-side schema validation before dispatch)
+→ a deliberate retrieval mode (wait / tail / group poll / webhook for
+services only, rendered as a decision table) → report. Adds the
+previously undocumented webhook body, scoped explicitly away from coding
+harnesses, and honest cost reporting: `duration_ms` is per-run truth,
+`/api/ui/v1/usage/stats` is a window aggregate and there is no per-run
+cost endpoint to quote.
+
+Every operational fact from 0.7.0 is preserved: server resolution, MCP,
+discovery gotchas, start-before-dispatch and the missing-key blocking
+handoff, entry-points-only, contract-before-call, no-coverage offer,
+concurrency/load/canary, workspace_handle/furrow, wedge protocol,
+sessions, audit trail, failure table (plus a row for `af wait` exit 2 =
+timeout, not failure) and hard rules.
+
+Frontmatter, catalog and mirror pins bumped to 0.8.0; adds contract
+tests for the offload doctrine and the async golden path.
+
+* fix(desktop): keep bundled provisioning local-only and make uninstall stick
+
+First-launch provisioning ran against whatever control plane was active, so
+a user with a cloud control plane configured would get swe-planner and pr-af
+installed onto the remote server on the first launch after upgrading, and
+the app-global provisionedBundled latch would then suppress local
+provisioning for good. planBundledInstalls now takes cloudActive and skips
+while a cloud connection is active; it also treats an unreadable registry
+as "not ready" instead of "nothing installed", and the runner asks the
+control plane whether it has the install API before seeding rows, so an
+older control plane is skipped once per launch instead of producing two red
+rows every time.
+
+"Uninstall sticks" only held for nodes the app itself installed: a node the
+user already had was skipped by the plan but never recorded, so removing it
+later brought it back on the next launch. Installed-but-unrecorded bundled
+nodes are now adopted into provisionedBundled before any install runs.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(desktop): land a first launch on the arriving bundled rows, not the marketplace
+
+The cold-launch default route is applied on the first snapshot, which the
+renderer fetches the moment it mounts — long before main has finished
+autostart and seeded any provisioning rows. defaultView therefore always
+saw bundled=0 / agents=0 on a fresh install, chose add-mode, and the user
+sat in a marketplace (now without swe-planner and pr-af) while the two
+nodes installed out of sight. Re-evaluate once: if the auto-applied view
+is still add-mode, no deep link or user navigation has happened, and
+bundled rows appear, switch to the Agents library. shouldRerouteToBundled
+is the pure decision with a truth-table test.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(desktop): refresh env reports when the registry gains a row; hide redundant bundled rows
+
+AgentsPanel loaded env reports on mount only. Provisioning is the first
+flow where registry rows appear while the panel stays mounted, so a
+freshly-landed bundled node rendered without its "Needs keys" chip or Keys
+button (both gated on a report) and without the pre-start key gate. The
+load effect is now keyed on a stable roster key (the set of agent names),
+so it re-runs exactly when a row is added or removed.
+
+A bundled node's 'installed' provisioning row was kept until the whole run
+finished, so it was rendered twice — provisioning row plus registry row —
+for the duration of the next node's install. visibleBundledRows drops any
+provisioning row whose name already has a registry row.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(desktop): keep bundled nodes reachable from the marketplace
+
+Removing swe-planner and pr-af from the curated catalog meant a user who
+uninstalled one had no curated way to get it back (the provisioned latch
+correctly never re-installs it). The catalog IPC now lists the bundled
+nodes ahead of the marketplace rows; installed ones render the usual
+"Installed" state, and a node the app is currently provisioning renders a
+disabled "Installing…" so the marketplace never asks the user to install
+what the app is already installing.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(control-plane,desktop): report keys supplied by the control plane's environment as set
+
+GET /api/ui/v1/agents/:id/secrets computed is_set from the encrypted store
+alone, while the runner's EnvResolver resolves the control plane's own
+process environment first. A key exported in the shell (or a Windows user
+env var) therefore started the agent fine but was reported missing — which
+the desktop turned into a non-dismissible "needs API keys" banner, a
+"Needs keys" chip, a blocked Start button and a one-shot OS notification,
+all false. The handler now checks the process environment too (presence
+only, never values), reports it as `env: true`, and is_set reflects
+runtime truth; `scope` still names only where a STORED value lives. The
+desktop maps env-only keys to the existing 'env' status ("From
+environment") and keeps storedScopes store-backed.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(desktop): tell a spawned control plane its own URL for the agents it starts
+
+The control plane hands every agent it starts the URL from its own
+AGENTFIELD_SERVER environment, falling back to http://localhost:8080
+regardless of the port it actually listens on. The app only pinned
+AGENTFIELD_PORT, so a control plane on any other port — the auto-picked one
+when 8080 is busy, or a configured one — told swe-planner, pr-af and the
+swe-pro engine to register with localhost:8080: with whatever else was there
+(observed live: the nodes joined an unrelated control plane on 8080), or
+nothing. Spawn the server with AGENTFIELD_SERVER=http://localhost:<port> too.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(desktop): seed the local control-plane port before the first poll
+
+Until autostart resolved the port, every early snapshot went to
+localhost:8080 — not the configured port, nor the one the last launch ended
+on. With something else on 8080 the renderer's first snapshot described a
+foreign server (a healthy control plane with an empty registry), and the
+cold-launch route was decided on it. applyConnectionProfile now seeds the
+local port from settings.controlPlanePort ?? lastControlPlanePort, so the
+first poll of a launch already targets this app's control plane.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(desktop): decide the cold-launch route only once the registry is readable
+
+The registry is read through the control plane, so the first poll after a
+cold autostart sees "no registry" while the server is coming up. Routing on
+that snapshot sent a user with a stocked library into the marketplace on
+every cold launch. canDecideDefaultRoute waits for a readable registry (or
+provisioning rows, which only exist once the control plane answered); until
+then the initial Home view with its control-plane status is what shows.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* test(control-plane): cover the agent-secrets handler's default process-env lookup
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* test(control-plane): make the runner-resolution secrets test hermetic
+
+EnvResolver prefers a non-empty process env value, so a developer machine
+with OPENAI_API_KEY exported resolved the host value instead of the stored
+sk-test and the assertion failed outside CI. Neutralize the variable with
+t.Setenv — empty counts as unset — so the test is deterministic everywhere.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Opus 5 <noreply@anthropic.com>
+Co-authored-by: santoshkumarradha <eng@agentfield.ai>
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com> (2bbf5ff)
+
 ## [0.1.132-rc.2] - 2026-08-20
 
 
