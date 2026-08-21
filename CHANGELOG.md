@@ -6,6 +6,134 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.133-rc.1] - 2026-08-21
+
+
+### Fixed
+
+- Fix(control-plane): stop counting agent restarts as failed executions (#941)
+
+* fix(control-plane): stop counting agent restarts as failed executions
+
+A long-running agent node restarts constantly during development — the user
+saves a file, hits Ctrl-C, or the process dies on a syntax error. The control
+plane kept believing the node was healthy for as long as it took the health
+checker to notice (~30s) or the heartbeat to go stale (60s). Every call that
+landed inside that window created an execution record, failed to dial the dead
+process, and was recorded as a failed execution. The user was charged a failure
+for a five-second restart, and it is the largest single source of failed
+executions a new user produces.
+
+Three changes, in the order a call meets them:
+
+1. Fail fast on a node we already know is down. prepareExecutionForTarget
+   checked pending-approval but never health, so a dispatch into a dead node
+   persisted a row and then failed it. It now returns 503 node_unavailable
+   BEFORE the execution record exists — a request we never dispatched is a
+   rejected request, not a failed execution. This mirrors the check
+   reasoners.go has always had on the legacy proxy route. Only definitively
+   down states are rejected: "unknown" (no heartbeat yet) still goes through,
+   or the first call of every session would fail.
+
+2. Absorb the restart when we do NOT know the node is down. A dial failure is
+   the one transport error that is unambiguously safe to retry — no bytes
+   reached the agent, so nothing can run twice — so the dispatch now waits for
+   the node to come back and replays against its current address, which may be
+   a different port. Recovery is read from the node record (a fresh
+   instance_id, or a heartbeat that advanced), not guessed by blind retrying.
+   Bounded by agent_restart_grace, default 15s, well inside the 90s agent call
+   timeout; serverless targets are excluded because they have no resident
+   process to come back.
+
+3. Close the detection gap. When the wait expires we demote the node to
+   inactive, conditional on the heartbeat we last observed, so the next caller
+   takes path 1 and fails fast instead of repeating the wait.
+
+Also exempts held executions from the orphan reaper. The re-registration that
+ENDS a restart is exactly what triggers MarkAgentExecutionsOrphaned, so the
+reaper was failing the very execution the retry was about to complete, and the
+sync caller received that failure even though the work went on to succeed.
+Executions marked awaiting_agent_restart are now skipped, on both the
+executions table and the workflow_executions row the DAG UI reads.
+
+Finally, "agent 'x' not found" now classifies as target_not_found rather than
+internal_error. That is the quickstart curl run before `python main.py`: a
+normal mistake that was being reported as a broken control plane. The category
+already existed in canonicalFailureCategory and nothing ever assigned it.
+
+Verified against a real Python SDK agent: a call fired while the agent was
+down, with the process returning 4s later, now returns HTTP 200 succeeded and
+emits execution_completed. Before this change the same sequence returned 502
+with an agent_restart_orphaned message. The documented quickstart runs clean
+end to end.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+* fix(control-plane): harden the restart-absorb path against review findings
+
+Four behavioral fixes to the agent-restart grace mechanism, each found by
+adversarial review of the original commit:
+
+1. Serverless nodes are exempt from the fail-fast health gate. They have no
+   heartbeat loop and the health monitor never polls them, so the presence
+   sweep marks every serverless node inactive shortly after registration —
+   the gate would have rejected every serverless invocation with 503
+   node_unavailable, permanently. The gate now runs after serverless
+   normalization and skips serverless targets entirely.
+
+2. Replay requests bypass the gate. A replay hit is served from the recorded
+   run without contacting the agent, so the node being down must not reject
+   it. A replay miss dials and fails exactly as before the gate existed.
+
+3. A cancel that lands during the restart wait now wins: the loop re-reads
+   the execution record before replaying (mirroring callAgent's pre-dispatch
+   check) and aborts without handing the agent work the caller disowned. A
+   pause similarly waits for its resume.
+
+4. The wait aborts as soon as the node record reports the node definitively
+   down (demoted by the health checker or by another dispatch whose grace
+   expired first). Queued dispatches aimed at one dead node no longer each
+   burn their full grace serially on the async worker pool.
+
+Also: the awaiting_agent_restart hold is now released on every exit path
+(including caller-context cancellation, via a detached write), the comment
+overstating what completeExecution can repair after an orphan-reaper race is
+corrected (workflow_executions has no exit from failed), and the test fake's
+UpdateAgentHealthAtomic now enforces the same conditional-heartbeat semantics
+as LocalStorage instead of discarding the argument.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Opus 5 <noreply@anthropic.com>
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com> (e486208)
+
+- Fix(assets): correct garbled text in README features-strip banner (#940)
+
+The AI-generated banner image read '90+ Production Features built into
+the controhe' — a garbled 'control plane'. Re-typeset the line as
+'built into the control plane' in Inter (the repo's UI typeface),
+matching the original colors, cap height, and starfield background.
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (0f91495)
+
+
+
+### Other
+
+- Bundle sec-af and cloudsecurity-af with the desktop app (#939)
+
+Promote the two security nodes from marketplace catalog rows to
+BUNDLED_NODES, so a fresh install provisions all four agent nodes
+(swe-planner, pr-af, sec-af, cloudsecurity-af) on first launch. Both
+repos follow the same superseded_by //go redirect as SWE-AF and pr-af,
+and their maintained nodes are Go, so the stale python language chips
+go away with the move. CATALOG stays as the (now empty) seam for
+future marketplace-only rows.
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (30f821e)
+
 ## [0.1.132] - 2026-08-20
 
 ## [0.1.132-rc.3] - 2026-08-20
