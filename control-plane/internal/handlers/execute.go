@@ -39,6 +39,7 @@ type ExecutionStore interface {
 	UpdateExecutionRecord(ctx context.Context, executionID string, update func(*types.Execution) (*types.Execution, error)) (*types.Execution, error)
 	QueryExecutionRecords(ctx context.Context, filter types.ExecutionFilter) ([]*types.Execution, error)
 	RegisterExecutionWebhook(ctx context.Context, webhook *types.ExecutionWebhook) error
+	HasExecutionWebhook(ctx context.Context, executionID string) (bool, error)
 	StoreWorkflowExecution(ctx context.Context, execution *types.WorkflowExecution) error
 	UpdateWorkflowExecution(ctx context.Context, executionID string, updateFunc func(*types.WorkflowExecution) (*types.WorkflowExecution, error)) error
 	GetWorkflowExecution(ctx context.Context, executionID string) (*types.WorkflowExecution, error)
@@ -1007,7 +1008,7 @@ func (c *executionController) handleStatusUpdate(ctx *gin.Context) {
 
 	if isTerminal {
 		c.updateWorkflowExecutionFinalState(reqCtx, executionID, types.ExecutionStatus(normalizedStatus), updated.ResultPayload, elapsed, errorMsg)
-		if updated.WebhookRegistered {
+		if hasWH, _ := c.store.HasExecutionWebhook(reqCtx, executionID); hasWH {
 			c.triggerWebhook(executionID)
 		}
 	}
@@ -2433,6 +2434,12 @@ func renderStatus(exec *types.Execution) ExecutionStatusResponse {
 // fields from the corresponding WorkflowExecution record, if one exists.
 func (c *executionController) renderStatusWithApproval(ctx context.Context, exec *types.Execution) ExecutionStatusResponse {
 	resp := renderStatus(exec)
+
+	// Resolve webhook_registered from the execution_webhooks table since the
+	// field is not persisted on the execution record itself (db:"-").
+	if hasWH, err := c.store.HasExecutionWebhook(ctx, exec.ExecutionID); err == nil {
+		resp.WebhookRegistered = hasWH
+	}
 
 	// Best-effort enrichment — if the lookup fails we still return the base response.
 	wfExec, err := c.store.GetWorkflowExecution(ctx, exec.ExecutionID)

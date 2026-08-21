@@ -467,3 +467,80 @@ func TestBatchExecutionStatusHandler_MixedResults(t *testing.T) {
 func ptrString(value string) *string {
 	return &value
 }
+
+// TestGetExecutionStatusHandler_WebhookRegisteredFromStore verifies that the
+// GET /executions/:id endpoint reports webhook_registered=true based on the
+// execution_webhooks table, not the unpersisted field on the execution record.
+// Regression test for issue #936.
+func TestGetExecutionStatusHandler_WebhookRegisteredFromStore(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	store := newTestExecutionStorage(nil)
+	now := time.Now().UTC()
+
+	execution := &types.Execution{
+		ExecutionID:       "exec-wh",
+		RunID:             "run-1",
+		Status:            types.ExecutionStatusSucceeded,
+		StartedAt:         now,
+		CreatedAt:         now,
+		UpdatedAt:         now,
+		WebhookRegistered: false, // As if loaded from DB (db:"-")
+	}
+	require.NoError(t, store.CreateExecutionRecord(context.Background(), execution))
+
+	// Register webhook separately (simulates the real execution_webhooks table)
+	secret := "s3cr3t"
+	require.NoError(t, store.RegisterExecutionWebhook(context.Background(), &types.ExecutionWebhook{
+		ExecutionID: "exec-wh",
+		URL:         "https://example.com/hook",
+		Secret:      &secret,
+	}))
+
+	router := gin.New()
+	router.GET("/api/v1/executions/:execution_id", GetExecutionStatusHandler(store))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/executions/exec-wh", nil)
+	resp := httptest.NewRecorder()
+
+	router.ServeHTTP(resp, req)
+
+	require.Equal(t, http.StatusOK, resp.Code)
+
+	var payload ExecutionStatusResponse
+	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &payload))
+	require.True(t, payload.WebhookRegistered, "webhook_registered must be true when a webhook exists in the store (issue #936)")
+}
+
+// TestGetExecutionStatusHandler_NoWebhook verifies webhook_registered=false
+// when no webhook is registered for the execution.
+func TestGetExecutionStatusHandler_NoWebhook(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	store := newTestExecutionStorage(nil)
+	now := time.Now().UTC()
+
+	execution := &types.Execution{
+		ExecutionID: "exec-no-wh",
+		RunID:       "run-1",
+		Status:      types.ExecutionStatusSucceeded,
+		StartedAt:   now,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+	require.NoError(t, store.CreateExecutionRecord(context.Background(), execution))
+
+	router := gin.New()
+	router.GET("/api/v1/executions/:execution_id", GetExecutionStatusHandler(store))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/executions/exec-no-wh", nil)
+	resp := httptest.NewRecorder()
+
+	router.ServeHTTP(resp, req)
+
+	require.Equal(t, http.StatusOK, resp.Code)
+
+	var payload ExecutionStatusResponse
+	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &payload))
+	require.False(t, payload.WebhookRegistered, "webhook_registered must be false when no webhook exists")
+}
