@@ -1549,6 +1549,24 @@ func (c *executionController) prepareExecutionForTarget(ctx context.Context, tar
 			agent.DeploymentType = "serverless"
 		}
 	}
+
+	// Reject a call to a node we already know is down BEFORE the execution
+	// record is created. Dispatching into a dead node would persist a row and
+	// then fail it, charging the caller for a failed execution when nothing
+	// was ever attempted. See execute_agent_restart.go.
+	//
+	// Serverless nodes are exempt: they have no heartbeat loop and the health
+	// monitor never polls them, so the presence sweep marks every serverless
+	// node inactive shortly after registration — their recorded health says
+	// nothing about whether an invocation would succeed. Replay requests are
+	// also exempt: a replay hit is served from the recorded run without ever
+	// contacting the agent, so the node being down must not reject it (a
+	// replay miss simply dials and fails exactly as it did before this gate).
+	if agent.DeploymentType != "serverless" && strings.TrimSpace(headers.replaySourceRunID) == "" {
+		if err := ensureAgentDispatchable(agent); err != nil {
+			return nil, err
+		}
+	}
 	if agent.DeploymentType == "serverless" && (agent.InvocationURL == nil || strings.TrimSpace(*agent.InvocationURL) == "") {
 		if trimmed := strings.TrimSpace(agent.BaseURL); trimmed != "" {
 			execURL := strings.TrimSuffix(trimmed, "/") + "/execute"
@@ -1871,50 +1889,13 @@ func (c *executionController) callAgent(ctx context.Context, plan *preparedExecu
 		}
 	}
 
-	url := buildAgentURL(plan.agent, plan.target)
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(plan.requestBody))
-	if err != nil {
-		return nil, 0, false, fmt.Errorf("create agent request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Run-ID", plan.exec.RunID)
-	req.Header.Set("X-Execution-ID", plan.exec.ExecutionID)
-	req.Header.Set("X-Workflow-ID", plan.exec.RunID)
-	if plan.exec.ParentExecutionID != nil {
-		req.Header.Set("X-Parent-Execution-ID", *plan.exec.ParentExecutionID)
-	}
-	if plan.exec.SessionID != nil {
-		req.Header.Set("X-Session-ID", *plan.exec.SessionID)
-	}
-	if plan.exec.ActorID != nil {
-		req.Header.Set("X-Actor-ID", *plan.exec.ActorID)
-	}
-	if c.internalToken != "" {
-		req.Header.Set("Authorization", "Bearer "+c.internalToken)
-	}
-	if plan.callerDID != "" {
-		req.Header.Set("X-Caller-DID", plan.callerDID)
-	}
-	if plan.targetDID != "" {
-		req.Header.Set("X-Target-DID", plan.targetDID)
-	}
-	if plan.replaySourceRunID != "" {
-		req.Header.Set("X-AgentField-Replay-Source-Run-ID", plan.replaySourceRunID)
-	}
-	if plan.replayBeforeExecutionID != "" {
-		req.Header.Set("X-AgentField-Replay-Before-Execution-ID", plan.replayBeforeExecutionID)
-	}
-	if plan.replayMode != "" {
-		req.Header.Set("X-AgentField-Replay-Mode", plan.replayMode)
-	}
-
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.dispatchAgentRequest(ctx, plan)
 	if err != nil {
 		return nil, time.Since(start), false, fmt.Errorf("agent call failed: %w", err)
 	}
 	defer resp.Body.Close()
 
+	url := buildAgentURL(plan.agent, plan.target)
 	if resp.StatusCode == http.StatusAccepted {
 		logger.Logger.Info().
 			Str("execution_id", plan.exec.ExecutionID).
@@ -2745,6 +2726,14 @@ func classifyRawError(err error) ErrorCategory {
 	// Cancelled context
 	if errors.Is(err, context.Canceled) || strings.Contains(errStr, "context canceled") {
 		return ErrorCategoryInternal
+	}
+
+	// An agent or reasoner that does not exist. Matched on the messages
+	// prepareExecutionForTarget and determineTargetType produce, in the same
+	// style as the transport patterns above.
+	if strings.Contains(errStr, "not found") &&
+		(strings.HasPrefix(errStr, "agent '") || strings.HasPrefix(errStr, "target '")) {
+		return ErrorCategoryTargetNotFound
 	}
 
 	return ErrorCategoryInternal
