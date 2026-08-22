@@ -6,6 +6,44 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.133-rc.2] - 2026-08-22
+
+
+### Fixed
+
+- Fix(execute): resolve webhook not triggering on async status callback (#936) (#943)
+
+The WebhookRegistered field on types.Execution carries db:"-" and is
+never persisted to the database.  This caused two failures:
+
+1. Status callback path: when an async execution completes via the
+   agent's PUT /executions/:id/status callback, the handler checked
+   updated.WebhookRegistered (always false from DB) and therefore
+   never triggered webhook delivery.
+
+2. GET /executions/:id: renderStatus read the same unpersisted field,
+   so it always reported webhook_registered=false to polling clients.
+
+Fix: add HasExecutionWebhook to the ExecutionStore interface and use
+it in both the status-callback trigger path and renderStatusWithApproval
+to resolve the webhook state from the execution_webhooks table.
+
+Includes regression tests for both paths. (db3c285)
+
+- Fix(ci): stop functional-test runs from reporting to production telemetry (#942)
+
+Every functional-test run starts the control plane on a fresh /data volume,
+which mints a new anonymous install ID. With telemetry enabled by default,
+each CI run therefore appears in product metrics as a brand-new first-time
+user whose activity is the suite's fixed set of successful and failed
+executions — the same counts every run, drowning out real first-run signal.
+
+The test config is mounted by both the local and postgres compose stacks
+(and the log-demo one), so disabling telemetry here covers every functional
+CI path with one setting.
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (0bd4a4a)
+
 ## [0.1.133-rc.1] - 2026-08-21
 
 
