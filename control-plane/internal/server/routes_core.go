@@ -29,8 +29,16 @@ func (s *AgentFieldServer) registerCoreRoutes(agentAPI *gin.RouterGroup) {
 	// Health check endpoint for container orchestration
 	agentAPI.GET("/health", s.healthCheckHandler)
 
+	// Apply global rate limiting if enabled
+	if s.rateLimitGlobal != nil {
+		agentAPI.Use(middleware.RateLimit(s.rateLimitGlobal))
+	}
+
 	// Discovery endpoints
 	discovery := agentAPI.Group("/discovery")
+	if s.rateLimitDiscovery != nil {
+		discovery.Use(middleware.RateLimit(s.rateLimitDiscovery))
+	}
 	{
 		discovery.GET("/capabilities", handlers.DiscoveryCapabilitiesHandler(s.storage))
 	}
@@ -48,7 +56,7 @@ func (s *AgentFieldServer) registerCoreRoutes(agentAPI *gin.RouterGroup) {
 	// New unified status API endpoints
 	agentAPI.GET("/nodes/:node_id/status", handlers.GetNodeStatusHandler(s.statusManager))
 	agentAPI.POST("/nodes/:node_id/status/refresh", handlers.RefreshNodeStatusHandler(s.statusManager))
-	agentAPI.POST("/nodes/status/bulk", handlers.BulkNodeStatusHandler(s.statusManager, s.storage))
+	agentAPI.POST("/nodes/status/bulk", s.withBulkStatusRateLimit(handlers.BulkNodeStatusHandler(s.statusManager, s.storage)))
 	agentAPI.POST("/nodes/status/refresh", handlers.RefreshAllNodeStatusHandler(s.statusManager, s.storage))
 
 	// Enhanced lifecycle management endpoints
@@ -93,6 +101,9 @@ func (s *AgentFieldServer) registerCoreRoutes(agentAPI *gin.RouterGroup) {
 	// These routes may have permission middleware applied if authorization is enabled.
 	executeGroup := agentAPI.Group("/execute")
 	{
+		if s.rateLimitExecute != nil {
+			executeGroup.Use(middleware.RateLimit(s.rateLimitExecute))
+		}
 		if s.config.Features.DID.Authorization.Enabled && s.accessPolicyService != nil && s.didWebService != nil {
 			permConfig := middleware.PermissionConfig{
 				Enabled:     true,
@@ -325,4 +336,36 @@ func (s *AgentFieldServer) checkCacheHealth(ctx context.Context) gin.H {
 		"message":       "cache is responsive",
 		"response_time": time.Since(startTime).Milliseconds(),
 	}
+}
+
+// withBulkStatusRateLimit wraps a handler with the bulk-status rate limiter.
+// Returns the handler directly if rate limiting is not enabled.
+func (s *AgentFieldServer) withBulkStatusRateLimit(h gin.HandlerFunc) gin.HandlerFunc {
+	if s.rateLimitBulkStatus == nil {
+		return h
+	}
+	return func(c *gin.Context) {
+		key := rateLimitKeyFromContext(c)
+		if !s.rateLimitBulkStatus.Allow(key) {
+			retryAfter := "1"
+			c.Header("Retry-After", retryAfter)
+			c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{
+				"error":          "rate limit exceeded",
+				"error_category": "rate_limit",
+				"retry_after":    retryAfter,
+			})
+			return
+		}
+		h(c)
+	}
+}
+
+// rateLimitKeyFromContext derives a rate limit key from the gin context.
+func rateLimitKeyFromContext(c *gin.Context) string {
+	if apiKey, exists := c.Get("api_key_identity"); exists {
+		if key, ok := apiKey.(string); ok && key != "" {
+			return "key:" + key
+		}
+	}
+	return "ip:" + c.ClientIP()
 }

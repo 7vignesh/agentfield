@@ -86,6 +86,11 @@ type AgentFieldServer struct {
 	tracerShutdown         func(context.Context) error
 	telemetryService       *observability.TelemetryService
 	configMu               sync.RWMutex
+	// Rate limiting stores for hot endpoints
+	rateLimitExecute    *middleware.RateLimiterStore
+	rateLimitDiscovery  *middleware.RateLimiterStore
+	rateLimitBulkStatus *middleware.RateLimiterStore
+	rateLimitGlobal     *middleware.RateLimiterStore
 	// Trigger / webhook plugin system
 	triggerDispatcher *services.TriggerDispatcher
 	sourceManager     *services.SourceManager
@@ -822,6 +827,20 @@ func (s *AgentFieldServer) Stop() error {
 		s.cancelDispatcher.Stop()
 	}
 
+	// Stop rate limiter eviction goroutines
+	if s.rateLimitExecute != nil {
+		s.rateLimitExecute.Stop()
+	}
+	if s.rateLimitDiscovery != nil {
+		s.rateLimitDiscovery.Stop()
+	}
+	if s.rateLimitBulkStatus != nil {
+		s.rateLimitBulkStatus.Stop()
+	}
+	if s.rateLimitGlobal != nil {
+		s.rateLimitGlobal.Stop()
+	}
+
 	if s.registryWatcherCancel != nil {
 		s.registryWatcherCancel()
 		s.registryWatcherCancel = nil
@@ -876,6 +895,7 @@ func (s *AgentFieldServer) Stop() error {
 // contains no handler logic.
 func (s *AgentFieldServer) setupRoutes() {
 	s.applyGlobalMiddleware()
+	s.initRateLimiters()
 
 	s.registerPublicRoutes()
 	s.registerDIDWellKnownRoutes()
@@ -902,6 +922,67 @@ func (s *AgentFieldServer) setupRoutes() {
 	s.registerMCPRoutes()
 	s.registerPprofRoutes()
 	s.register404()
+}
+
+// initRateLimiters creates per-endpoint rate limiter stores based on config.
+// Keys idle for more than 10 minutes are evicted to avoid unbounded growth.
+func (s *AgentFieldServer) initRateLimiters() {
+	cfg := s.config.AgentField.RateLimit
+	if !cfg.Enabled {
+		return
+	}
+
+	const evictionTTL = 10 * time.Minute
+
+	// Apply defaults for unconfigured values.
+	executeRPS := cfg.ExecuteRPS
+	if executeRPS <= 0 {
+		executeRPS = 50
+	}
+	executeBurst := cfg.ExecuteBurst
+	if executeBurst <= 0 {
+		executeBurst = 100
+	}
+
+	discoveryRPS := cfg.DiscoveryRPS
+	if discoveryRPS <= 0 {
+		discoveryRPS = 20
+	}
+	discoveryBurst := cfg.DiscoveryBurst
+	if discoveryBurst <= 0 {
+		discoveryBurst = 40
+	}
+
+	bulkStatusRPS := cfg.BulkStatusRPS
+	if bulkStatusRPS <= 0 {
+		bulkStatusRPS = 30
+	}
+	bulkStatusBurst := cfg.BulkStatusBurst
+	if bulkStatusBurst <= 0 {
+		bulkStatusBurst = 60
+	}
+
+	globalRPS := cfg.GlobalRPS
+	if globalRPS <= 0 {
+		globalRPS = 200
+	}
+	globalBurst := cfg.GlobalBurst
+	if globalBurst <= 0 {
+		globalBurst = 400
+	}
+
+	s.rateLimitExecute = middleware.NewRateLimiterStore(executeRPS, executeBurst, evictionTTL)
+	s.rateLimitDiscovery = middleware.NewRateLimiterStore(discoveryRPS, discoveryBurst, evictionTTL)
+	s.rateLimitBulkStatus = middleware.NewRateLimiterStore(bulkStatusRPS, bulkStatusBurst, evictionTTL)
+	s.rateLimitGlobal = middleware.NewRateLimiterStore(globalRPS, globalBurst, evictionTTL)
+
+	logger.Logger.Info().
+		Float64("execute_rps", executeRPS).
+		Int("execute_burst", executeBurst).
+		Float64("discovery_rps", discoveryRPS).
+		Float64("bulk_status_rps", bulkStatusRPS).
+		Float64("global_rps", globalRPS).
+		Msg("⚡ Rate limiting enabled")
 }
 
 var absPathForServerID = filepath.Abs
