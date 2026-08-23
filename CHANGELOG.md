@@ -6,6 +6,36 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.134-rc.1] - 2026-08-23
+
+
+### Fixed
+
+- Fix(storage): row-lock read-modify-write updates on postgres (lost-update race) (#953)
+
+UpdateExecutionRecord and the workflow-execution updater are
+BEGIN -> SELECT -> mutate in Go -> UPDATE every column -> COMMIT. Under
+postgres READ COMMITTED two overlapping updaters both read the same
+snapshot and the later COMMIT writes its stale copy back, discarding the
+earlier one. Observed in production (Railway template, postgres mode): an
+execution-note write racing the terminal status callback reverted a
+reasoner's status from succeeded back to running with a NULL result — the
+SDK's poll loop never saw the reasoner finish and the parent build hung
+until its 6h timeout. SQLite never shows this because it serializes
+writers.
+
+Append FOR UPDATE to the RMW SELECTs in postgres mode only (SQLite does
+not accept the syntax and does not need it): a concurrent updater now
+blocks until the first transaction commits, then re-reads the committed
+row. Single-row primary-key locks, so no new deadlock ordering.
+
+The regression test reproduces the exact interleaving deterministically:
+it fails on the pre-fix code with 'note was lost to the concurrent status
+write' and passes with the lock (verified against postgres 14; the test
+skips unless POSTGRES_TEST_URL is set, like the other postgres tests).
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (e55a626)
+
 ## [0.1.133] - 2026-08-23
 
 ## [0.1.133-rc.5] - 2026-08-23
