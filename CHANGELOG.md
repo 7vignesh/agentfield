@@ -6,6 +6,43 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.133-rc.5] - 2026-08-23
+
+
+### Fixed
+
+- Fix(execute): make terminal status callbacks idempotent, reject cross-terminal rewrites (#951)
+
+A status callback that re-delivers an execution's final status (e.g. an SDK
+retrying after a lost 200) was accepted and re-ran every side effect: the
+record was rewritten (result, duration_ms, completed_at), the webhook was
+re-notified, and another completed/failed lifecycle event was published to
+the execution bus — double-counting the execution for every bus consumer
+(SSE clients, tracing, product telemetry).
+
+Worse, the terminal guard only rejected terminal→non-terminal writes despite
+its comment, so a late duplicate callback could flip "succeeded" to "failed"
+(or the reverse) after the outcome had already been observed, and emit an
+execution_failed event for an execution that had already completed.
+
+- terminal→same-terminal: acknowledged with 200 as a strict no-op — no
+  record rewrite, no webhook, no usage ingestion, no lifecycle event.
+- terminal→different-terminal: rejected with 409 via the new
+  errTerminalStatusConflict sentinel so bounded SDK retries fail fast
+  instead of reading as a server fault.
+- terminal→non-terminal: unchanged (still rejected; pinned by
+  TestUpdateExecutionStatusHandler_TerminalRegression).
+
+Verified live against an isolated control plane wired through the real
+telemetry relay: on main, a completed execution receiving two duplicate
+succeeded callbacks and one failed callback emitted three
+execution_completed events plus one execution_failed and left the record
+flipped to failed; with this fix the same sequence emits exactly one
+execution_completed, answers the duplicates with 200 no-ops and the flip
+with 409, and the record stays intact.
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (ea897a0)
+
 ## [0.1.133-rc.4] - 2026-08-23
 
 
