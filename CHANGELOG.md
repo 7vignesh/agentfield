@@ -6,6 +6,44 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.133-rc.3] - 2026-08-23
+
+
+### Fixed
+
+- Fix(execute): propagate agent 4xx in async lane instead of blanket 502 (#862) (#945)
+
+The async-completion branch in handleSync hardcoded HTTP 502 for all
+failed executions, making client-input rejections (e.g. 422)
+indistinguishable from upstream outages. The sync lane correctly
+propagated the agent's 4xx via writeExecutionError, but the async
+lane — which reads the execution from DB after the agent calls back —
+had no way to recover the original HTTP status.
+
+Root cause: the callError.statusCode is lost once the execution is
+persisted; the async lane only sees the stored record.
+
+Fix (two-pronged):
+
+Control plane:
+- Add error_status_code field to executionStatusUpdateRequest so the
+  SDK can forward the HTTP status in its failure callback.
+- When error_status_code is 4xx, encode it in StatusReason as
+  "agent_client_error:<code>" for persistence.
+- Add httpStatusForFailedExecution() helper that resolves the HTTP
+  status from StatusReason (encoded client errors, known categories)
+  and ErrorMessage ("agent error (NNN):" pattern fallback).
+- Replace hardcoded 502 in the async-completion branch with the helper.
+
+Python SDK:
+- In _execute_async_with_callback failure path, propagate
+  error_status_code from exception.status_code / exception.code when
+  the value is a valid HTTP status (400-599).
+
+Backward-compatible: SDKs that don't send error_status_code continue
+to get the existing behavior (502 default). SDKs that do send it get
+correct 4xx propagation immediately. (ad79ab5)
+
 ## [0.1.133-rc.2] - 2026-08-22
 
 
