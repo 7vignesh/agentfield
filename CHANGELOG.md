@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.133-rc.4] - 2026-08-23
+
+
+### Fixed
+
+- Fix(go-sdk): preserve structured AI API errors (#948)
+
+* fix(go-sdk): preserve structured AI API errors
+
+* test(go-sdk): cover non-2xx error edges (1af112c)
+
 ## [0.1.133-rc.3] - 2026-08-23
 
 
