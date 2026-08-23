@@ -2773,6 +2773,14 @@ class Agent(FastAPI):
                 "execution_id": execution_id,
                 "reasoner": reasoner_name,
             }
+            # Propagate the HTTP status code when the exception carries one so
+            # the control plane can return the correct 4xx to callers instead of
+            # a blanket 502 Bad Gateway (issue #862).
+            exc_status = getattr(exc, "status_code", None)
+            if exc_status is None:
+                exc_status = getattr(exc, "code", None)
+            if isinstance(exc_status, int) and 400 <= exc_status < 600:
+                payload["error_status_code"] = exc_status
             # A reasoner that ran, determined its own work failed, and wants its
             # structured outcome preserved raises ReasonerFailed(result=...).
             # Carry that result onto the failed-status payload so the control

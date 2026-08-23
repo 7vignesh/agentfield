@@ -125,6 +125,11 @@ type executionStatusUpdateRequest struct {
 	DurationMS   *int64                 `json:"duration_ms,omitempty"`
 	CompletedAt  *time.Time             `json:"completed_at,omitempty"`
 	Progress     *int                   `json:"progress,omitempty"`
+	// ErrorStatusCode is the optional HTTP status code the agent SDK sends to
+	// indicate whether the failure is client-facing (4xx) or an upstream error
+	// (5xx). When present and in the 4xx range, the control plane propagates it
+	// to callers instead of returning a blanket 502 Bad Gateway.
+	ErrorStatusCode *int `json:"error_status_code,omitempty"`
 	// Usage is the optional token/cost usage object the agent SDK attaches at
 	// the top level of the status-callback body. It is a sibling of Result, so
 	// it is never persisted into the result payload. Absent = no-op.
@@ -359,7 +364,7 @@ func (c *executionController) handleSync(ctx *gin.Context) {
 			}
 			ctx.Header("X-Execution-ID", exec.ExecutionID)
 			ctx.Header("X-Run-ID", exec.RunID)
-			ctx.JSON(http.StatusBadGateway, response)
+			ctx.JSON(httpStatusForFailedExecution(exec), response)
 			return
 		}
 
@@ -942,6 +947,16 @@ func (c *executionController) handleStatusUpdate(ctx *gin.Context) {
 
 		current.Status = normalizedStatus
 		current.StatusReason = req.StatusReason
+		// When the SDK sends an error_status_code in the 4xx range, record it in
+		// StatusReason so the async-completion branch can propagate the correct
+		// HTTP status to the caller (instead of a blanket 502).
+		if req.ErrorStatusCode != nil && *req.ErrorStatusCode >= 400 && *req.ErrorStatusCode < 500 {
+			code := fmt.Sprintf("agent_client_error:%d", *req.ErrorStatusCode)
+			current.StatusReason = &code
+		} else if req.StatusReason == nil && req.ErrorStatusCode != nil && *req.ErrorStatusCode >= 500 {
+			reason := string(ErrorCategoryAgentError)
+			current.StatusReason = &reason
+		}
 		if len(resultBytes) > 0 {
 			current.ResultPayload = json.RawMessage(resultBytes)
 			current.ResultURI = resultURI
@@ -2744,6 +2759,56 @@ func classifyRawError(err error) ErrorCategory {
 	}
 
 	return ErrorCategoryInternal
+}
+
+// httpStatusForFailedExecution determines the HTTP status code to return to
+// callers for a failed execution record. It replaces the hardcoded 502 in the
+// async-completion branch with context-aware classification:
+//
+//  1. If StatusReason encodes a client error ("agent_client_error:<code>"), use that code.
+//  2. If StatusReason maps to a known server-side category, use the appropriate 5xx.
+//  3. Parse ErrorMessage for the "agent error (NNN):" pattern produced by the sync lane.
+//  4. Default to 502 Bad Gateway.
+func httpStatusForFailedExecution(exec *types.Execution) int {
+	// Check StatusReason for an encoded client error status code.
+	if exec.StatusReason != nil {
+		reason := *exec.StatusReason
+		if strings.HasPrefix(reason, "agent_client_error:") {
+			codeStr := strings.TrimPrefix(reason, "agent_client_error:")
+			if code, err := strconv.Atoi(codeStr); err == nil && code >= 400 && code < 500 {
+				return code
+			}
+		}
+		// Map known server-side categories.
+		switch ErrorCategory(reason) {
+		case ErrorCategoryAgentTimeout:
+			return http.StatusGatewayTimeout
+		case ErrorCategoryAgentUnreachable:
+			return http.StatusBadGateway
+		case ErrorCategoryTargetNotFound:
+			return http.StatusNotFound
+		case ErrorCategoryNodeUnavailable:
+			return http.StatusServiceUnavailable
+		case ErrorCategoryConcurrencyLimit:
+			return http.StatusTooManyRequests
+		}
+	}
+
+	// Fallback: parse ErrorMessage for the "agent error (NNN):" pattern that
+	// the sync lane produces when the agent returns an HTTP error directly.
+	if exec.ErrorMessage != nil {
+		msg := *exec.ErrorMessage
+		if strings.HasPrefix(msg, "agent error (") {
+			if idx := strings.Index(msg, "):"); idx > 13 {
+				codeStr := msg[13:idx]
+				if code, err := strconv.Atoi(codeStr); err == nil && code >= 400 && code < 500 {
+					return code
+				}
+			}
+		}
+	}
+
+	return http.StatusBadGateway
 }
 
 func pointerTime(t time.Time) *time.Time {
