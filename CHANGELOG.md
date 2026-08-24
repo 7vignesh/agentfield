@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.134-rc.3] - 2026-08-24
+
+
+### Chores
+
+- Chore(deps): bump nanoid override to 3.3.18 (#919) (93acd36)
+
 ## [0.1.134-rc.2] - 2026-08-24
 
 
