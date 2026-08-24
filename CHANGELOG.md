@@ -6,6 +6,57 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.134-rc.4] - 2026-08-24
+
+
+### Fixed
+
+- Fix: Update reinstalls catalog nodes from the catalog source; expose each package's recorded source (#956)
+
+* fix(control-plane): let package update take a source override; expose recorded source
+
+`POST /api/ui/v1/agents/packages/:packageId/update` accepts an optional
+`{"source": "<url>"}`. A present source is validated and used for the
+update job instead of the `source_path` recorded in installed.yaml; an
+absent or empty body keeps the recorded-source behaviour older clients
+rely on. Job semantics are unchanged: still an update (forced reinstall in
+place, stop-if-running, restart-if-was-running), unknown package → 404.
+
+`SyncPackagesFromRegistry` now copies installed.yaml `source_path` into
+the existing `AgentPackage.Repository` column, and the packages list and
+details responses expose it as `source`, so a UI can show where a package
+was actually installed from.
+
+Why: a package installed from a personal e2e repo was "updated" from the
+desktop card that links to Agent-Field/SWE-AF, and the update re-fetched
+the e2e repo — the recorded source was the only one the control plane
+knew, and nothing showed it.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(desktop): update catalog nodes from the catalog source; show where an install came from
+
+"Update" on an installed catalog card now sends the catalog entry's
+source to the control plane, so the reinstall fetches the vetted repo
+(e.g. Agent-Field/SWE-AF) rather than whatever source the package was
+first installed from. The IPC boundary still carries only a vetted
+catalog name; the source comes from main-process catalog data.
+
+The installed card shows "installed from <owner/repo…>" when the control
+plane reports a recorded source that names a different repository than
+the catalog row. Same repo with a `//subdir` or `@ref` — what a
+`superseded_by:` redirect records — is not drift (`sameSourceRepo`).
+
+Older control planes that ignore the body and report no source keep
+working: the update falls back to their recorded-source behaviour and
+the card shows no label.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (1481911)
+
 ## [0.1.134-rc.3] - 2026-08-24
 
 
