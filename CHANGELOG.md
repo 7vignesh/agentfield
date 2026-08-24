@@ -6,6 +6,42 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.134-rc.2] - 2026-08-24
+
+
+### Added
+
+- Feat(control-plane): add per-key rate limiting on hot endpoints (#429) (#952)
+
+Without rate limiting, a single misbehaving client can exhaust the
+async worker pool and database connections on hot endpoints, starving
+legitimate traffic.
+
+Implementation:
+- Add RateLimiterStore using golang.org/x/time/rate with per-key
+  token-bucket limiters and background idle eviction (10 min TTL).
+- Add RateLimit gin middleware that keys on API key (from auth
+  middleware) or client IP, returns HTTP 429 with Retry-After header.
+- Add RateLimitConfig to agentfield.yaml config with per-endpoint
+  settings: execute (50 rps/100 burst), discovery (20/40),
+  bulk_status (30/60), global (200/400).
+- Wire into routes: global limiter on /api/v1, dedicated limiters on
+  /execute group, /discovery group, and /nodes/status/bulk.
+- Opt-in via config: rate_limit.enabled = true in agentfield.yaml.
+  Disabled by default to avoid breaking existing deployments.
+- Graceful shutdown: Stop() halts eviction goroutines.
+
+Tests (9 cases):
+- Token bucket enforcement and burst
+- Idle key eviction
+- Active key not evicted
+- Normal traffic allowed
+- 429 returned with Retry-After header and JSON body
+- Per-key isolation (different clients independent)
+- API-key-based keying when auth is present
+- Config enabled/disabled logic
+- Default config values (c78b22c)
+
 ## [0.1.134-rc.1] - 2026-08-23
 
 
