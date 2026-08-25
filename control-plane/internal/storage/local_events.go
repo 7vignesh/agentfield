@@ -11,7 +11,6 @@ import (
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 )
 
-
 // TransactionalStorage methods (not fully implemented for local storage yet)
 func (ls *LocalStorage) BeginTransaction() (Transaction, error) {
 	return nil, fmt.Errorf("transactions not fully implemented for LocalStorage")
