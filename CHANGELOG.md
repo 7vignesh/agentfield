@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.134-rc.6] - 2026-08-25
+
+
+### Testing
+
+- Test(storage): extend config lifecycle coverage (#949)
+
+* test(storage): [AgentField/Config] add table-driven CRUD coverage
+
+- verify config versioning, audit metadata, and lexical ordering
+
+- cover missing keys and cancelled set, list, and delete operations
+
+* test(storage): [AgentField/Config] avoid duplicate CRUD suite
+
+- extend existing lifecycle coverage for audit timestamps
+
+- verify exact delete errors and cancelled operations preserve state (86df3c2)
+
 ## [0.1.134-rc.5] - 2026-08-25
 
 
