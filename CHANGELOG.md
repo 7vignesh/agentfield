@@ -6,6 +6,48 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.134-rc.5] - 2026-08-25
+
+
+### Fixed
+
+- Fix(sdk): make async teardown exception-safe (#950)
+
+* fix(sdk): make async teardown exception-safe
+
+* fix(sdk): cap litellm for Python 3.10 compatibility (d28379e)
+
+- Fix(sdk/go): propagate caller context through MemoryBackend interface (#433) (#958)
+
+All HTTP methods in ControlPlaneMemoryBackend used http.NewRequest
+(without context), so a cancelled execution context could not cancel
+in-flight memory I/O. This caused 15-second hangs on timeout under
+load when cancelled executions held HTTP connections and goroutines
+until the http.Client timeout fired.
+
+Fix:
+- Add context.Context as first parameter to all MemoryBackend
+  interface methods (Set, Get, Delete, List, SetVector, GetVector,
+  SearchVector, DeleteVector).
+- ControlPlaneMemoryBackend: switch all http.NewRequest calls to
+  http.NewRequestWithContext(ctx, ...).
+- InMemoryBackend: accept context parameter (ignored since in-memory
+  ops are non-blocking).
+- Memory and ScopedMemory: pass through the caller ctx (already
+  available from method signatures) to the backend.
+- Update all test mocks and callers.
+
+Tests:
+- New TestControlPlaneMemoryBackend_ContextCancellation: verifies all
+  8 methods return context.Canceled immediately when context is
+  already cancelled, and DeadlineExceeded returns promptly (not after
+  the 15s client timeout).
+- All existing memory tests pass with updated signatures.
+
+This is an interface-breaking change. Any external MemoryBackend
+implementations must add context.Context as the first parameter to
+all methods. (bcbcc29)
+
 ## [0.1.134-rc.4] - 2026-08-24
 
 
