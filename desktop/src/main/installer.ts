@@ -237,20 +237,17 @@ export function installFromSource(
 }
 
 /**
- * Update an installed catalog agent from the latest catalog source, not its
- * recorded source — replacing a stale origin is the point. The control plane
- * stops a running agent, reinstalls with force, then restores its prior run
- * state. Resolves (never rejects) with the outcome.
+ * Update an installed package. Catalog rows use the latest curated source;
+ * non-catalog rows omit the override so the control plane uses the source it
+ * recorded at install time. The control plane owns stop/reinstall/restore.
  */
 export async function updateAgent(
   name: string,
   onLine: (line: string) => void,
-  deps: InstallerDeps = defaultInstallerDeps()
+  deps: InstallerDeps = defaultInstallerDeps(),
+  options: { force?: boolean } = {}
 ): Promise<InstallResult> {
   const entry = catalogEntry(name)
-  if (!entry) {
-    return { ok: false, message: `"${name}" is not in the install catalog` }
-  }
   try {
     if (!(await deps.cpClient.hasInstallApi())) {
       return { ok: false, message: UPDATE_REQUIRED }
@@ -259,8 +256,17 @@ export async function updateAgent(
     // Only a git URL can be handed to the control plane as an override (its
     // source validator wants https://github.com/…); any other catalog source
     // shape falls back to the recorded-source update rather than a 400.
-    const override = entry.source.startsWith('https://') ? entry.source : undefined
-    const { job_id } = await deps.cpClient.updatePackage(name, override)
+    // Catalog rows follow the catalog's current source. Any other installed
+    // package updates from the source recorded by the control plane, so the
+    // desktop can manage GitHub-installed packages without inventing a URL.
+    const override = entry?.source.startsWith('https://') ? entry.source : undefined
+    const updateOptions = override !== undefined || options.force === true
+      ? {
+          ...(override === undefined ? {} : { source: override }),
+          ...(options.force === true ? { force: true } : {})
+        }
+      : undefined
+    const { job_id } = await deps.cpClient.updatePackage(name, updateOptions)
     const job = await deps.cpClient.watchInstallJob(job_id, onLine)
     if (job.status !== 'succeeded') {
       return { ok: false, message: job.error || job.lines.at(-1) || `Failed to update ${name}` }
@@ -276,6 +282,18 @@ export async function updateAgent(
   } catch (err) {
     if (err instanceof CpApiError && err.status === 404) {
       return { ok: false, message: UPDATE_REQUIRED }
+    }
+    if (
+      err instanceof CpApiError &&
+      err.status === 409 &&
+      err.code === 'executions_active' &&
+      err.activeExecutions !== undefined
+    ) {
+      return {
+        ok: false,
+        message: err.message,
+        activeExecutions: err.activeExecutions
+      }
     }
     return {
       ok: false,

@@ -128,7 +128,7 @@ describe('control-plane installs', () => {
   it('updates catalog agents from the current catalog source', async () => {
     const client = installClient()
     await updateAgent(ENTRY.name, () => {}, { cpClient: client })
-    expect(client.updatePackage).toHaveBeenCalledWith(ENTRY.name, ENTRY.source)
+    expect(client.updatePackage).toHaveBeenCalledWith(ENTRY.name, { source: ENTRY.source })
   })
 
   it('surfaces conflict and old-control-plane errors without fallback', async () => {
@@ -198,12 +198,17 @@ describe('control-plane installs', () => {
     })
   })
 
-  it('rejects unknown catalog names at the async function boundary', async () => {
-    await expect(installAgent('not-in-catalog', () => {})).resolves.toEqual({
-      ok: false,
-      message: '"not-in-catalog" is not in the install catalog'
+  it('updates non-catalog packages from their recorded source', async () => {
+    const client = installClient()
+    await expect(updateAgent('custom-agent', () => {}, { cpClient: client })).resolves.toEqual({
+      ok: true,
+      message: 'custom-agent updated'
     })
-    await expect(updateAgent('not-in-catalog', () => {})).resolves.toEqual({
+    expect(client.updatePackage).toHaveBeenCalledWith('custom-agent', undefined)
+  })
+
+  it('still rejects unknown catalog names on install', async () => {
+    await expect(installAgent('not-in-catalog', () => {})).resolves.toEqual({
       ok: false,
       message: '"not-in-catalog" is not in the install catalog'
     })

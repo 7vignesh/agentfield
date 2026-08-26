@@ -10,6 +10,7 @@ import (
 	"github.com/Agent-Field/agentfield/control-plane/internal/config"
 	"github.com/Agent-Field/agentfield/control-plane/internal/handlers"
 	"github.com/Agent-Field/agentfield/control-plane/internal/logger"
+	"github.com/Agent-Field/agentfield/control-plane/internal/packages"
 	"github.com/Agent-Field/agentfield/control-plane/internal/server/middleware"
 
 	"github.com/gin-gonic/gin"
@@ -28,6 +29,7 @@ func (s *AgentFieldServer) registerPublicRoutes() {
 func (s *AgentFieldServer) registerCoreRoutes(agentAPI *gin.RouterGroup) {
 	// Health check endpoint for container orchestration
 	agentAPI.GET("/health", s.healthCheckHandler)
+	agentAPI.GET("/version", s.versionHandler)
 
 	// Apply global rate limiting if enabled
 	if s.rateLimitGlobal != nil {
@@ -225,7 +227,7 @@ func (s *AgentFieldServer) healthCheckHandler(c *gin.Context) {
 	healthStatus := gin.H{
 		"status":    "healthy",
 		"timestamp": time.Now().UTC().Format(time.RFC3339),
-		"version":   "1.0.0", // TODO: Get from build info
+		"version":   buildVersion,
 		"checks":    gin.H{},
 	}
 	if furrowPublicAddr := os.Getenv("FURROW_PUBLIC_ADDR"); furrowPublicAddr != "" {
@@ -271,6 +273,44 @@ func (s *AgentFieldServer) healthCheckHandler(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, healthStatus)
+}
+
+type hostingInfo struct {
+	Platform      string `json:"platform"`
+	ProjectID     string `json:"project_id,omitempty"`
+	EnvironmentID string `json:"environment_id,omitempty"`
+	ServiceID     string `json:"service_id,omitempty"`
+	DeploymentID  string `json:"deployment_id,omitempty"`
+	Region        string `json:"region,omitempty"`
+}
+
+func (s *AgentFieldServer) versionHandler(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{
+		"version":    buildVersion,
+		"commit":     buildCommit,
+		"build_date": buildDate,
+		"hosting":    detectHosting(),
+		"features":   []string{"package_updates", "boot_restore"},
+	})
+}
+
+func detectHosting() hostingInfo {
+	platform := packages.HostingPlatform()
+	if platform == packages.HostingRailway {
+		serviceID := os.Getenv("RAILWAY_SERVICE_ID")
+		return hostingInfo{
+			Platform:      platform,
+			ProjectID:     os.Getenv("RAILWAY_PROJECT_ID"),
+			EnvironmentID: os.Getenv("RAILWAY_ENVIRONMENT_ID"),
+			ServiceID:     serviceID,
+			DeploymentID:  os.Getenv("RAILWAY_DEPLOYMENT_ID"),
+			Region:        os.Getenv("RAILWAY_REPLICA_REGION"),
+		}
+	} else if platform == packages.HostingDocker {
+		return hostingInfo{Platform: platform}
+	}
+
+	return hostingInfo{Platform: packages.HostingLocal}
 }
 
 // checkStorageHealth performs a lightweight storage readiness probe.
