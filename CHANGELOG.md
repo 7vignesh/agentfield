@@ -6,6 +6,470 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.134-rc.7] - 2026-08-26
+
+
+### Added
+
+- Feat: desktop-driven and automatic updates for the cloud control plane and installed agents (#957)
+
+* control-plane: report the real build version on /health and add GET /api/v1/version
+
+/health hardcoded "version": "1.0.0", so no client could tell what a
+control plane was running. Report the ldflags build version instead, and
+add GET /api/v1/version with commit, build date, a hosting block (railway
+ids from the Railway-provided environment, docker, or local) and the
+feature list clients use for capability detection.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* docker: stamp version, commit and build date into the control-plane images
+
+Both Dockerfiles built af without -ldflags, so every published image
+reported "dev". Add VERSION/COMMIT/BUILD_DATE build args, pass them from
+the release workflow, and make the docker smoke test assert the built image
+does not report dev.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* desktop: update the cloud control plane from the app and enable Railway auto-updates
+
+Detect a newer stable control-plane release against the RUNNING version
+(GET /api/v1/version) instead of local OpenTofu state, check in the
+background (15 s after launch, then every 4 h) and show a dismissible
+banner. "Update now" works for deployments the desktop created (OpenTofu
+re-apply after a refresh, never a downgrade) and for any Railway-hosted
+control plane that reports its service identity (Railway API: set image +
+redeploy), then waits until the control plane reports the target version.
+
+After a first deploy the desktop enables Railway Image Auto Updates on a
+Nightly (02:00-06:00 UTC) window; Off / Nightly / Weekends / Anytime are
+selectable and bound to the service they were applied to. Re-running a
+deploy never overwrites an explicit choice.
+
+Also fixes "Upgrade & redeploy" being unreachable for accounts with more
+than one Railway workspace, makes railway-status resilient to workspace
+lookup failures, and moves cloud settings merges into the main process so
+the renderer never writes back a stale nested settings object.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* docs: rewrite the Railway deployment guide for the current images and update model
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* desktop: show package update status, allow updating any installed agent, and report a stale local control plane
+
+Surface the control plane's per-package update state (available / pinned /
+paused) in the Agents view with Update and Pause/Resume actions, let
+non-catalog packages update from their recorded source, and add a Settings
+row with the last check, the last maintenance pass, Check now and Run
+maintenance now. The boot chain asks the control plane for update state
+once after provisioning so chips are fresh on first paint.
+
+When the managed af binary was replaced on launch and the adopted local
+control plane still runs the old build (Windows/Linux), say so and give the
+restart instruction instead of spawning a second server; macOS is left to
+af-tray. Autostart failures no longer skip bundled provisioning.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* control-plane: record git provenance and desired state; make process liveness identity-aware
+
+Every git install now records the resolved commit, the requested ref, an
+auto_update flag and updated_at in installed.yaml (mirrored into the
+package metadata), so "is this package current?" is answerable without a
+clone. installed.yaml also gains desired_state — the user's intent, set by
+run and cleared only by an explicit stop — separate from the observed
+status that reconciliation rewrites.
+
+Recorded PIDs are validated by process identity (start time) and by the
+recorded port's health with node identity, through one shared ownership
+rule: a healthy port with a different node id is foreign, a healthy port
+with our id or no id is ours, a silent port means the process is gone, and
+an unidentified PID is never signalled. Forced reinstalls (git and local)
+stop the running package gracefully first and restart it afterwards, and
+`af stop` records the stopped intent even for a crashed node. `af list`
+shows the short commit. Windows gets a taskkill/tasklist stop ladder.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* control-plane: check packages for updates without cloning; maintenance pass with boot restore
+
+Add a git ls-remote based checker (serialized, 10 s per package) and a
+maintenance service that runs ~20 s after the server starts and every 6 h
+(AGENTFIELD_PACKAGE_UPDATE_INTERVAL): it restarts every package whose
+desired state is running but whose process is gone, checks each git
+package's source, and reinstalls only those whose source moved — skipping
+explicit @ref pins, paused packages, nodes with active executions
+(deferred and retried) and superseded renames. Off with
+AGENTFIELD_PACKAGE_AUTO_UPDATE=0 or when git is unavailable; restore still
+runs. The update job preserves the package's .env and previous port, keeps
+the running intent through its stop, and dispatches to a node under update
+get a 10-minute restart grace. A malformed registry can no longer panic
+the pass.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* control-plane: expose package update state and maintenance controls over the UI API
+
+Wire the maintenance service into the server lifecycle (cancelled on
+Stop) and add the endpoints the desktop uses: POST
+/api/ui/v1/agents/packages/check-updates, PUT
+/api/ui/v1/agents/packages/:id/auto-update, GET and POST
+/api/ui/v1/agents/packages/maintenance[/run]. The packages list and
+details carry installed_commit, source_ref, auto_update and the last
+check result, and no longer advertise a port for a package that is not
+running. Stopping an already-stopped agent through the UI returns 200 and
+records the intent instead of 400.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* desktop: never redeploy a current control plane; report what the update restored; make update controls honest
+
+"Update now" now returns "already running vX" without touching Railway when
+the resolved target equals the running version, sleeps before its first
+probe and only accepts the control plane once it reports a new Railway
+deployment id (falling back to a version match for control planes that
+report no hosting identity). After the restart it waits for the boot
+maintenance pass and names the agents that were restored — and the ones
+that were not, with the reason — instead of assuming.
+
+The update banner now covers control planes too old to report their
+version, keeps a successful result visible for a moment before the
+follow-up check clears it, and the local restart-required notice is global,
+names the af server action, and clears itself once the control plane
+reports the new version. Railway image-update controls are offered only
+when the connected control plane resolves to a Railway service, and the
+workspace picker is read-only once a deployment exists.
+
+Manual package updates send {force} and, on a 409 executions_active
+response, ask "N runs in progress … update anyway?" before retrying;
+rows whose unattended update failed show an "Update failed" chip with the
+reason.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* control-plane: reconcile lifecycle operations through the ownership rule; bound process stop
+
+RunAgent, StopAgent and forced reinstalls used to decide whether a recorded
+PID was still ours with a PID-only probe (boot id + kill 0). In a replaced
+container PIDs restart from 1, so the recorded PID is frequently alive as an
+unrelated process and RunAgent refused the boot restore with "already
+running" — the exact case the restore exists for. Lifecycle callers now use
+the shared ownership rule on every platform (process start-time identity
+plus the recorded port's health with node identity): a dead or foreign
+record is cleared and the package starts; an equivalent or anonymous healthy
+endpoint is left alone; a foreign process is never signalled. Read paths use
+the same rule on Linux, keep the health-identity rule on Windows and the
+cheap PID probe on macOS so dashboard polls never spawn ps.
+
+DefaultProcessManager.Stop waited on a child forever after SIGTERM; a node
+that ignores the signal wedged the maintenance goroutine for the life of the
+container. It now waits five seconds, then SIGKILLs and reaps with a bound.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* control-plane: never take a node down for an update that cannot succeed; remember failing commits; 409 on active executions
+
+The update job stopped the running node before cloning, so a source that
+could not be installed (a superseded_by rename, an unreachable remote, a
+broken tree) still cost an outage — and, because the installed commit never
+advanced, the unattended pass repeated the stop/clone/fail/restart cycle
+every six hours forever. The git installer now exposes a BeforeReplace
+transaction boundary that fires only after the incoming tree, manifest,
+expected name and superseded_by target have been validated, immediately
+before the installed directory is stashed; the update job passes its
+stop-for-update there and restarts only if it fired. An unattended failure
+records the remote HEAD it tried as update status "failed" with the reason;
+the same HEAD is re-checked with ls-remote but not cloned or stopped again,
+a moved HEAD retries, and a manual update clears the memo.
+
+Manual updates gained {"force": bool}: without it, a package whose node has
+executions in flight answers 409 {"code": "executions_active",
+"active_executions": N} instead of killing the run; the existing job-slot
+conflict answers 409 {"code": "job_running"}.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* control-plane: migrate legacy desired state in containers; start restore on readiness; retry with backoff; keep dispatches waiting
+
+The control plane deployed today rewrites status: stopped for any dead PID
+as soon as the desktop polls, so most upgraded cloud registries carry
+"stopped" and no desired_state, and the first boot of the new build would
+restore nothing. Before its first restore, the maintenance pass now migrates
+entries without desired_state once: running when the control plane is
+hosted in a container (Railway or Docker, via the shared hosting helper the
+version endpoint also uses), status-derived on a local machine. Explicit
+stops recorded afterwards are never resurrected.
+
+The boot pass starts two seconds after the HTTP listener is serving instead
+of a flat twenty, and arms the ten-minute dispatch grace for every package
+it intends to restore, so calls that land while nodes are coming back wait
+instead of failing. The grace is honoured before dispatch too:
+ensureAgentDispatchable and the restart wait no longer reject a node the
+health monitor demoted while its update or restore is in progress. A pass
+that leaves a desired-running package down, or defers an update, reschedules
+itself at 1, 5 and 15 minutes before the configured interval; a clean pass
+resets the backoff and next_run_at always reports the real next run. Restore
+skips a package whose update job holds the mutation slot, and each restore
+attempt is bounded to 90 seconds so one stuck start cannot hold the pass.
+
+GET /api/ui/v1/agents/packages/maintenance adds boot_pass_completed and
+hosting so the desktop can report what a control-plane update actually
+brought back.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* control-plane: give dead-process test fixtures a closed port
+
+Four older fixtures recorded a dead process on port 8001 and asserted it
+reconciles to stopped. The Linux read path now probes the recorded port and
+treats an anonymous healthy listener as ours, so the tests failed whenever
+anything happened to serve on 8001 on the developer's machine. They now
+allocate a port that is guaranteed closed.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* sdk/python: port availability check must agree with the server's bind
+
+is_port_available and get_free_port bound a probe socket without
+SO_REUSEADDR, so a port whose previous connections were still in TIME_WAIT
+— every restart within about a minute of a graceful stop — was reported as
+taken even though uvicorn (which sets SO_REUSEADDR) binds it fine. Under
+AGENTFIELD_STRICT_PORT the node then exited or, with an explicit port, moved
+to the next one while the control plane kept polling the port it assigned
+and killed the node for "not becoming ready". The probe now sets
+SO_REUSEADDR to match the server.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* desktop: refuse non-comparable versions, decide already-current before auth, make apply feedback dismissible
+
+"Update now" refuses when either version cannot be compared (a NaN used to
+fall through both guards and redeploy the same image), returns the
+already-running result before a Railway token is requested, and the
+post-deploy poll ignores a non-comparable observed version. Apply feedback
+is an explicit state: failures are dismissible and cleared by the next
+status change, and a null latest version never reaches the copy.
+
+The restart-required notice tells the truth — stop the running "af server"
+process and start it again, or restart the machine — and clears as soon as
+cloud mode is enabled. The post-update summary counts only "restore …"
+errors as failed restores, reports other pass errors as maintenance
+warnings, and finishes on boot_restore_completed (or the older
+boot_pass_completed) so it is not held for update checks.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* control-plane: identify legacy processes by started_at; confirm before treating a live node as dead; serialize registry writes; maintenance loop never spins
+
+Records written before this PR carry started_at but no start_time. They
+now get an identity from the process's wall-clock start (Linux /proc btime
++ ticks, macOS ps, Windows PowerShell): a PID whose process started after
+the record was written is a recycled PID and the restore proceeds; one that
+started when the record says is ours even while its health endpoint is
+silent, so Stop signals it, status reads keep it, and RunAgent starts no
+duplicate. A record with no identity at all is never signalled: Stop now
+says so instead of answering "already stopped".
+
+Lifecycle decisions (RunAgent, Stop, restore) confirm a silent or failing
+health probe up to three times before concluding a live process is
+unhealthy or gone; status reads never block and never clear a record on a
+single missed probe. Every load-modify-save of installed.yaml goes through
+one process-wide registry transaction, so a dashboard reconcile can no
+longer overwrite a concurrent restore's write. Node-facing probes
+(readiness, identity, shutdown, capabilities, dev mode) use a transport
+without keep-alives so a node shutting down leaves no TIME_WAIT on its own
+port — the Python SDK's port check then still accepts the port the control
+plane assigned. Bounded Stop removes its bookkeeping even when the final
+reap times out.
+
+The maintenance loop waited on a zero-delay timer whenever a manual pass
+held the slot, burning a core until it finished; it now waits for the pass
+to end. A restore that overran its bound is tracked per package and later
+passes report it as "starting" instead of launching a second copy; restore
+re-reads desired_state right before and after RunAgent so a stop issued
+during the boot window wins. Pass errors are phase-prefixed (restore /
+check / update), the second in-pass attempt does not duplicate messages,
+and boot_restore_completed is reported as soon as the restore loop ends.
+The dispatch grace is reference-counted and identified by an explicit flag
+(a configured 10-minute grace no longer disables the node_unavailable
+gate), and an in-flight wait re-reads it every poll. A failed migration
+write is logged and the pass restores from the in-memory entries.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* control-plane: attended rename updates stop and replace the node; failed-commit memo survives check errors; repair updates never 500
+
+An attended update whose manifest redirects to a differently named
+successor stops the running predecessor after the successor is installed,
+retires the old entry and starts the successor with the old port as a
+preference (the BeforeReplace boundary only covers same-name replacements).
+A transient ls-remote error no longer erases a failed@commit memo, so a
+deterministically failing update is not retried until the remote HEAD
+moves. An unreadable manifest falls back to the registry name for the
+active-execution check instead of failing a manual update with 500, and
+node-id candidates are deduplicated by exact string so hyphen/underscore/
+case variants are all queried.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* control-plane: drop an unused grace read; give the RunAgent fixture a closed port
+
+staticcheck flagged the initial extended-grace value in retryAfterAgentRestart
+as never used (it is re-read every poll). TestRunAgent_Success had its mock
+port manager hand out 8001, which the readiness wait probes for real, so it
+failed whenever a node was serving there on the developer's machine.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* control-plane: record running intent at an explicit start; close probe connections from the control plane
+
+The e2e harness caught two regressions in the round-2 changes.
+
+An explicit start (af run, the desktop/UI Start button) of a package whose
+desired_state was "stopped" — every fresh install, anything stopped
+before — no longer recorded running intent, because the post-readiness
+write only filled a blank value. After a container replacement the boot
+restore then skipped the node. RunAgent now persists desired_state: running
+before launching; a stop that lands while the node is still starting is
+written after that point and still wins.
+
+Node probes had been switched to "Connection: close", which asks the node
+to close the connection first and parks TIME_WAIT on the node's own port —
+exactly what makes the Python SDK's availability check refuse the assigned
+port on the next start, so nodes drifted to port+1 after every update. The
+node client now keeps the connection alive for the request and closes it
+from the control-plane side as soon as the body is done; E23 asserts the
+node sees the connection go idle and never receives Connection: close.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* control-plane: drop an empty branch left by the probe change; cover the node client's failure path
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* control-plane: remove an unused registry helper
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* control-plane: cover hosting classification, legacy start-time identity and registry store edge cases
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* control-plane: tighter legacy identity slack; a stop during an update wins; identity lookups outside the registry lock
+
+A legacy record's started_at is written after readiness, so a genuine
+process starts before it — only clock skew puts it after. The +30 s slack
+let a PID reused by a process launched moments after a redeploy count as
+ours; it is now 5 s. An update job no longer restarts a package whose
+desired_state became stopped while it was down (RunAgent would have recorded
+running intent again and erased the user's stop). Process identity is
+resolved before the registry transaction so the macOS/Windows shell-outs
+never stall every registry read. The stop fixture uses a PID above pid_max
+so it can never signal a real process on the developer's machine.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* desktop: wait for a pass summary before reporting what the boot restore did
+
+boot_restore_completed flips as soon as the restore loop ends, but on a
+fresh container last_run stays empty until the whole pass finishes; the
+post-update message now waits for a summary (or boot_pass_completed) instead
+of announcing zero agents restored.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* control-plane: a package reads as current right after an unattended update
+
+The job clears the check memo on success, which left update.status empty
+until the next check — the desktop showed nothing where "Up to date"
+belongs. The pass now records current at the HEAD it just installed.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* control-plane: never leave a node running that the registry could not record
+
+When the runtime write after readiness fails (a full volume fails every
+write), RunAgent used to return the error and leave the freshly started
+process running unrecorded; the next maintenance pass then started another
+copy beside it. The process is stopped before the error is returned.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* desktop: keep the update confirmation readable; truthful wording when the version check fails
+
+The follow-up check flips the cloud status to "current" within a second of
+a successful update and that status publication wiped the "Updated to vX.
+N agents restored." line; a successful result now stays for its 10 s window
+regardless of status changes (failures still clear on the next status or a
+dismiss). The version-check failure message no longer suggests restarting
+the desktop, which never re-runs the check; it names the af server restart.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* control-plane: guard the process manager's PID map
+
+Boot restores that overran their bound keep starting a node while later
+passes and update jobs start and stop others; the PID map was written from
+those goroutines without a lock, which is a fatal "concurrent map writes"
+in Go — the control plane container and every agent child with it.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* control-plane: Stop must not report success for a live node it cannot signal
+
+A Go node (no shutdown endpoint) that still answers on its port while the
+recorded PID is a different process — restarted by hand, a supervisor —
+used to make Stop return success and erase the record, leaving the node
+running with no way to stop it from the control plane. Stop now says the
+process is not the recorded PID and must be stopped manually, keeping the
+record. The service-level E7 case (unidentified live PID, silent port) gets
+its own test after a mutation check showed the guard was untested there.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* control-plane: publish the boot restore's summary before the update checks
+
+boot_restore_completed flipped as soon as the restore loop ended, but on a
+fresh container nothing was readable until the whole pass finished — the
+update checks that follow can take minutes — so the desktop's post-update
+report had nothing to show. When no pass has finished yet, the in-progress
+summary is published with the flag.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* desktop: give Stop/Start time to finish; show deferred and errored update checks
+
+Stopping a node that no longer answers takes the control plane a
+confirmation window plus the graceful-shutdown wait before it signals; the
+10 s request timeout reported "could not reach the control plane" for stops
+that then succeeded. Lifecycle requests now get 60 s. A pending update whose
+check was deferred (node busy) or errored kept the row chip-less; both now
+render with the reason as the tooltip.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* sdk/python: only relax the port probe with SO_REUSEADDR where the server does
+
+On Windows SO_REUSEADDR lets a socket bind over an active listener, so the
+probe would have reported occupied ports as free; the option is now set on
+POSIX only, matching uvicorn's bind.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* docs(railway): the legacy identity window is +5 s after started_at, not +30 s
+
+The README described the window that process_liveness.go enforces
+(legacyStartAfterRecord) with the value from an earlier draft.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (e3cc5b2)
+
 ## [0.1.134-rc.6] - 2026-08-25
 
 
