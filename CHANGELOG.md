@@ -6,6 +6,122 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.135-rc.3] - 2026-08-26
+
+
+### Fixed
+
+- Fix(skillkit): install OpenCode skills via native symlinks (#947)
+
+* fix(skillkit): install OpenCode skills via native symlinks
+
+* fix(skillkit): preserve OpenCode uninstall and status errors
+
+* fix(skillkit): report resolved OpenCode skill version
+
+* test(skillkit): cover OpenCode target edge paths
+
+* fix(skillkit): report resolved OpenCode skill version
+
+* test(skillkit): cover OpenCode target status paths
+
+* fix(skillkit): preserve OpenCode version link status
+
+* test(skillkit): cover OpenCode target edge cases
+
+* fix(skillkit): strip the legacy OpenCode AGENTS.md block on install
+
+Moving the OpenCode target to a native ~/.config/opencode/skills/<name>
+symlink leaves the marker block older af binaries appended to
+~/.config/opencode/AGENTS.md behind forever: uninstallMarkerBlock is no
+longer reachable for this target, so nothing can remove it. Upgrading
+users end up with the native skill *and* the stale instructions — the
+AGENTS.md bloat #813 was actually about. Codex made the same migration in
+#910 and shipped removeLegacyMarkerBlock for exactly this reason.
+
+Install (once the symlink is in place) and Uninstall (per catalog skill)
+now strip that block. The rules are deliberately stricter than the Codex
+helper, because the two files are not alike: Codex's AGENTS.override.md
+was created by af for itself, while ~/.config/opencode/AGENTS.md is
+written by the user and read by OpenCode. So a file holding no block of
+ours is never opened for writing — bytes and mtime stay exactly as the
+user left them — and the file is deleted only when removing our block is
+what emptied it. Reusing uninstallMarkerBlock verbatim would instead
+rewrite any AGENTS.md it can read (measured: a user file with no
+agentfield block goes 23 -> 21 bytes) and delete a deliberately empty
+one on every install.
+
+Other tools' marker blocks and user prose on both sides of ours survive;
+a missing file is a no-op; read/write failures propagate, matching the
+target's existing Uninstall error contract.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* test(skillkit): isolate the OpenCode uninstall test and snapshot its new root
+
+TestOpenCodeTargetUninstallRemovesCatalogEntries was the one OpenCode
+test that did not call withTempHome, so it built and tore down catalog
+entries in the home shared by the whole package instead of its own.
+
+realHomeSnapshot also still only fingerprinted the old
+~/.config/opencode/AGENTS.md. Now that OpenCode installs a directory of
+symlinks, add ~/.config/opencode/skills so the real-home pollution guard
+covers the path this target actually writes to.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* refactor(skillkit): route the OpenCode legacy cleanup through the package seams
+
+removeLegacyMarkerBlock called os.Remove/os.WriteFile/os.Rename directly
+while every other write path in the package goes through the reconcile*
+seams (reconcile.go), which exist precisely so a test can force a failure.
+The consequence was that its "remove", "write" and "rename into" branches
+could not be exercised at all: six lines that never ran once, and error
+strings that could ship wrongly wrapped without anything noticing.
+
+Switch the four filesystem calls to reconcileReadFile/reconcileRemove/
+reconcileWriteFile/reconcileRename and cover each failure through
+Uninstall, modelled on the reconciler's own rewrite-failure subtests.
+
+Also drop legacyRulesPath's error return. It could only fail when
+TargetPath() fails, and both call sites have already proven TargetPath()
+succeeds before reaching it — so the branch was unreachable and told a
+reader about a failure mode that does not exist. It now takes the resolved
+skills root, which lets Uninstall use the TargetPath() result it was
+already computing and discarding instead of re-resolving it per skill.
+
+No behaviour change: same files read, same files written, same errors
+returned.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(skillkit): keep a live OpenCode install recorded when the legacy block cannot be cleaned
+
+Install created the symlink first and then failed the whole target if the
+legacy ~/.config/opencode/AGENTS.md could not be cleaned up — a file mode
+000 from a botched dotfiles restore, or a directory sitting at that path.
+The caller records nothing for a failed target, so the outcome was the
+worst of both: the integration live on disk, `af skill list` reporting
+OpenCode as not installed, and every later `af skill install` exiting
+non-zero, all over a stale block that has no bearing on whether OpenCode
+can load the skill.
+
+Downgrade the cleanup to a warning on the install path so the install that
+already succeeded is reported and recorded. Uninstall keeps propagating the
+error: there, stripping the block is the entire point of the call.
+
+The ordering is deliberate and unchanged — the native skill goes in before
+the old block comes out, so an interrupted migration leaves the user with a
+working integration rather than neither.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Santosh kumar <29346072+santoshkumarradha@users.noreply.github.com>
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com>
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (9a14e21)
+
 ## [0.1.135-rc.2] - 2026-08-26
 
 
