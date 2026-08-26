@@ -49,13 +49,33 @@ func main() {
 	}
 }
 
+// loadServerConfig loads the server's configuration and brings the global
+// logger in line with it.
+//
+// Loading and logger configuration are deliberately the same call: the server
+// cannot obtain the config it runs on without the configured level having been
+// applied, so the level can never be silently left inert again (which is
+// exactly what shipped before — cmd/af read logging.level and never used it).
+func loadServerConfig(cmd *cobra.Command) (*config.Config, error) {
+	cfgFilePath, _ := cmd.Flags().GetString("config")
+	cfg, err := loadConfig(cfgFilePath)
+	if err != nil {
+		return nil, err
+	}
+	// The CLI root command only knows about --verbose; the AGENTFIELD_LOG_LEVEL
+	// env var and logging.level in agentfield.yaml are only visible once the
+	// config has been read.
+	cli.ApplyConfiguredLogLevel(cmd, cfg.Logging.Level)
+	return cfg, nil
+}
+
 // runServer contains the server startup logic for unified CLI
 func runServer(cmd *cobra.Command, args []string) {
 	logger.Logger.Debug().Msg("AgentField server starting...")
 
-	// Load configuration with better defaults
-	cfgFilePath, _ := cmd.Flags().GetString("config")
-	cfg, err := loadConfig(cfgFilePath)
+	// Load configuration with better defaults. This also applies the
+	// configured log level (see loadServerConfig).
+	cfg, err := loadServerConfig(cmd)
 	if err != nil {
 		logger.Logger.Fatal().Err(err).Msg("Failed to load configuration")
 	}
