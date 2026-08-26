@@ -6,6 +6,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.135-rc.1] - 2026-08-26
+
+
+### Changed
+
+- Refactor(storage): split local.go into focused files (9009 -> 5917 LOC) (#959)
+
+* refactor(storage): split local.go into focused files (9009 -> 5917 LOC) (#410)
+
+Split the largest file in the repo into logical units. Pure code
+movement, no behavior change, no renames, no new interfaces.
+
+Before: local.go = 9009 lines, 204 methods on LocalStorage
+After:
+  local.go       = 5917 lines (struct def, schema, executions, workflows, etc.)
+  local_init.go  =  398 lines (NewLocalStorage, Initialize, postgres setup, WAL checkpoint)
+  local_did.go   =  870 lines (DID registry, agent DIDs, component DIDs)
+  local_vc.go    =  485 lines (execution VCs, workflow VCs)
+  local_events.go= 1400 lines (workflow events, execution logs, webhook events, DID docs, access policies, tag VCs)
+
+All methods remain on *LocalStorage. No import path changes for
+callers. Tests pass unchanged.
+
+* style(storage): gofmt import ordering and stray blank lines (8515d6e)
+
 ## [0.1.134] - 2026-08-26
 
 ## [0.1.134-rc.7] - 2026-08-26
