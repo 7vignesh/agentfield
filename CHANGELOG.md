@@ -6,6 +6,44 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.135-rc.2] - 2026-08-26
+
+
+### Fixed
+
+- Fix(openrouter): auto-switch stream=false for non-pcm16 audio formats… (#962)
+
+* fix(openrouter): auto-switch stream=false for non-pcm16 audio formats (#584)
+
+- OpenRouter SSE streaming only emits pcm16 audio deltas; requesting
+  mp3/flac/opus with stream=True returns a format-related error.
+- Add OpenRouterProvider._nonstream_openrouter_audio helper that calls
+  chat/completions with stream=False and parses the JSON response body
+  (choices[0].message.audio.{data, transcript}).
+- generate_audio chat-completions path now selects streaming vs non-streaming
+  based on the requested wire format: pcm16 -> SSE; anything else -> JSON.
+- Existing SSE tests updated to use format=pcm16.
+- New TestOpenRouterNonStreamAudio covers mp3/flac, HTTP errors, invalid JSON,
+  empty choices, and pcm16 staying on the SSE path (13 tests total, all pass).
+
+Closes: #584
+
+* test(openrouter): use pcm16 for SSE integration cases
+
+* test(openrouter): pin SSE integration cases to pcm16 and assert the stream flag
+
+The previous commit switched the requested format to pcm16 but left the
+format assertion expecting mp3. Assert pcm16, and assert stream=True on the
+sent payload so these two tests are explicitly pinned to the SSE path.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: fcy222fcy <fcy222fcy@users.noreply.github.com>
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com>
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (fefef44)
+
 ## [0.1.135-rc.1] - 2026-08-26
 
 
