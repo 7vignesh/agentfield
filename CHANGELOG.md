@@ -6,6 +6,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.135-rc.4] - 2026-08-26
+
+
+### CI
+
+- Ci(release): retry the multi-arch image builds once and make npm publish re-runnable (#964)
+
+The v0.1.134 release died in the publish job when BuildKit raced on its own
+QEMU emulator while starting the arm64 stages of the cloud image
+("/dev/.buildkit_qemu_emulator: text file busy"). By then the GitHub
+release, PyPI and npm had already been published, and re-running the job was
+impossible because npm refuses to publish over an existing version.
+
+- Each image build gets one retry; the second attempt reuses the gha cache,
+  so it only redoes the stage that died.
+- npm publish skips versions that are already on the registry, like PyPI's
+  --skip-existing, so "re-run failed jobs" works after a Docker failure.
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (3cf0b59)
+
 ## [0.1.135-rc.3] - 2026-08-26
 
 
