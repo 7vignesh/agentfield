@@ -175,9 +175,28 @@ except ImportError:
     aiohttp = None
 
 
+# Values that count as "on" for opt-in boolean environment variables.
+_TRUTHY_ENV_VALUES = frozenset({"1", "true", "yes"})
+
+
+def _env_flag_enabled(name: str) -> bool:
+    """Return True when ``name`` is set to a truthy value (``1``/``true``/``yes``).
+
+    Comparison is case-insensitive and tolerates surrounding whitespace. Unset,
+    empty and unrecognised values are all treated as False, so a flag has to be
+    opted into deliberately.
+    """
+    return (os.getenv(name) or "").strip().lower() in _TRUTHY_ENV_VALUES
+
+
 def _detect_container_ip() -> Optional[str]:
     """
     Detect the external IP address when running in a containerized environment.
+
+    Sends outbound requests to the cloud metadata services and, as a last
+    resort, to a public IP echo service. Only ``_build_callback_candidates``
+    calls this, and it skips the probe whenever the callback URL is already
+    known or ``AGENTFIELD_DISABLE_IP_DETECTION`` is set.
 
     Returns:
         External IP address if detected, None otherwise
@@ -342,7 +361,17 @@ def _normalize_candidate(candidate: str, port: int) -> Optional[str]:
 def _build_callback_candidates(
     callback_url: Optional[str], port: int, *, include_defaults: bool = True
 ) -> List[str]:
-    """Assemble a prioritized list of callback URL candidates."""
+    """Assemble a prioritized list of callback URL candidates.
+
+    ``_detect_container_ip`` is the only step here that puts a request on the
+    wire: it reaches out to the cloud metadata endpoints and a public IP echo
+    service. (``_detect_local_ip`` opens a connectionless UDP socket toward
+    8.8.8.8 to read back the kernel's chosen source address; it sends nothing.)
+    The probe is skipped when the operator has already supplied a callback URL
+    (constructor argument or ``AGENT_CALLBACK_URL``), and can be turned off
+    outright with ``AGENTFIELD_DISABLE_IP_DETECTION=1``. This function is the
+    probe's only call site, so that flag suppresses it everywhere.
+    """
 
     candidates: List[str] = []
     seen: Set[str] = set()
@@ -360,6 +389,18 @@ def _build_callback_candidates(
     env_callback_url = os.getenv("AGENT_CALLBACK_URL")
     add_candidate(env_callback_url)
 
+    # An operator-supplied callback URL already answers the question the public
+    # IP probe exists to answer, and it always sorts ahead of anything the probe
+    # could contribute. Probing anyway costs nothing but egress the operator
+    # never asked for — on Kubernetes it shows up as NetworkPolicy deny noise
+    # against the link-local metadata address. Anything that failed to normalize
+    # is not treated as configured, so a malformed value still falls back to
+    # full auto-detection rather than leaving the agent with no candidates.
+    explicit_callback_configured = bool(candidates)
+    skip_ip_detection = explicit_callback_configured or _env_flag_enabled(
+        "AGENTFIELD_DISABLE_IP_DETECTION"
+    )
+
     # 3. Container/platform-specific hints
     if _is_running_in_container():
         railway_service_name = os.getenv("RAILWAY_SERVICE_NAME")
@@ -367,9 +408,10 @@ def _build_callback_candidates(
         if railway_service_name and railway_environment:
             add_candidate(f"http://{railway_service_name}.railway.internal:{port}")
 
-        external_ip = _detect_container_ip()
-        if external_ip:
-            add_candidate(f"http://{external_ip}:{port}")
+        if not skip_ip_detection:
+            external_ip = _detect_container_ip()
+            if external_ip:
+                add_candidate(f"http://{external_ip}:{port}")
 
     # 4. Local network hints
     local_ip = _detect_local_ip()
@@ -400,6 +442,9 @@ def _resolve_callback_url(callback_url: Optional[str], port: int) -> str:
     2. AGENT_CALLBACK_URL environment variable
     3. Auto-detection for containerized environments
     4. Fallback to localhost
+
+    Steps 1 and 2 short-circuit the public-IP half of step 3: once a callback
+    URL is configured there is nothing left for the probe to discover.
 
     Args:
         callback_url: Explicit callback URL from constructor
@@ -688,6 +733,12 @@ class Agent(FastAPI):
             callback_url (str, optional): Explicit callback URL for AgentField server to reach this agent.
                                          If not provided, will use AGENT_CALLBACK_URL environment variable,
                                          auto-detection for containers, or fallback to localhost.
+                                         Supplying it here is also what makes the agent resolve its
+                                         callback URL at construction time, and that resolution no longer
+                                         runs the outbound cloud-metadata/public-IP probe, because the URL
+                                         is already known. AGENT_CALLBACK_URL suppresses the probe the same
+                                         way for any caller that goes through callback discovery, and
+                                         AGENTFIELD_DISABLE_IP_DETECTION=1 suppresses it unconditionally.
             vc_enabled (bool | None, optional): Controls default VC generation policy for this agent node.
                                          True enables VCs for all reasoners/skills (default), False disables,
                                          and None defers entirely to platform defaults.
