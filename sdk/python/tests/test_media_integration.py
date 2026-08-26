@@ -439,12 +439,15 @@ class TestOpenRouterAudioE2E:
                 text="Say hello",
                 model="openai/gpt-audio-mini",
                 voice="nova",
-                format="mp3",  # avoid pcm→wav re-wrap so we can compare base64
+                format="pcm16",  # SSE streaming emits pcm16 audio deltas
             )
 
         assert result.audio is not None
         assert result.audio.data == "AAAABBBB"
-        assert result.audio.format == "mp3"
+        assert result.audio.format == "pcm16"
+        # pcm16 is the only wire format OpenRouter streams (#584) — this test
+        # must keep exercising the SSE path.
+        assert mock_session.post.call_args.kwargs["json"]["stream"] is True
 
     @pytest.mark.asyncio
     async def test_audio_sse_includes_optional_system_message(self):
@@ -482,12 +485,13 @@ class TestOpenRouterAudioE2E:
                 text="Read this dramatically",
                 model="openai/gpt-audio-mini",
                 voice="nova",
-                format="mp3",
+                format="pcm16",
                 system="You are a narrator. Use a calm documentary style.",
             )
 
         assert result.audio is not None
         payload = mock_session.post.call_args.kwargs["json"]
+        assert payload["stream"] is True
         assert payload["messages"] == [
             {
                 "role": "system",
