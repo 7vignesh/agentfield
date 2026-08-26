@@ -6,6 +6,224 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.135-rc.5] - 2026-08-26
+
+
+### Documentation
+
+- Docs: correct memory scope docs, the app.memory API list, and the exists() promise (#966)
+
+* docs(sdk/python): correct memory scope diagram, retention wording, and CLAUDE.md scope names
+
+The `agentfield.memory` module docstring drew global -> session -> actor ->
+workflow as one nested chain. They are not nested: session, actor and workflow
+are sibling dimensions keyed by X-Session-ID, X-Actor-ID and X-Workflow-ID
+respectively, and an unscoped read walks them in the fixed order
+workflow -> session -> actor -> global (GetMemoryHandler,
+control-plane/internal/handlers/memory.go). Redraw the diagram as a tree with
+global as the shared fallback and state the precedence explicitly.
+
+The same docstring claimed session values are "removed when the
+conversation/session ends" and workflow values "removed automatically when that
+run completes". Neither happens. There is no TTL or expiry column in either
+backend (BoltDB buckets locally, kv_store in postgres), and CleanupWorkflow
+deletes VC, webhook, execution, run and workflow-definition rows without
+touching memory. The only removal path is the explicit DeleteMemory endpoint.
+Document the actual behaviour: scope controls lookup and isolation, not
+lifetime.
+
+CLAUDE.md described the scopes as Global / Agent / Session / Run. There is no
+"agent" or "run" scope anywhere; that wording is what seeded issue #93. Correct
+the names to global / session / actor / workflow, and record that the Go SDK
+spells the actor scope agent.ScopeUser ("user") locally and translates it to
+"actor" on the wire.
+
+Also document OPENCODE_MAX_CONCURRENT in docs/harness-providers.md with the
+real per-SDK defaults (Go 4, Python 10), which were previously undocumented.
+
+Refs #121
+Refs #93
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* docs: correct leftover Agent/Run memory scope wording
+
+Fix Agent.memory, the in-product knowledge-base article, and the
+CLAUDE.md call signature so they match the real global/session/actor/
+workflow scopes and the Python get/set API.
+
+Co-authored-by: Santosh kumar <santoshkumarradha@users.noreply.github.com>
+
+* docs(sdk/python): record that memory exists() cannot detect a missing key
+
+`MemoryClient.exists` is implemented as "call get() and return False if it
+raised". `MemoryClient.get` returns the caller's default on a 404 instead of
+raising, so exists() answers True for every key the control plane can be
+reached for — a stored key and an absent one are indistinguishable. Verified
+live against an isolated control plane: exists() on a key that was never
+written returns True, while get(key, sentinel) correctly returns the sentinel.
+
+The four exists() docstrings promised the opposite ("True if key exists, False
+otherwise"). They now state the real behaviour and point at the get()+sentinel
+workaround. The unit tests do not catch this because they monkeypatch get() to
+raise on a miss, which the real get() never does.
+
+Docs only — no behaviour change. The implementation fix belongs in its own PR.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* docs(sdk/python): list the real app.memory API on the Agent.memory property
+
+The "Memory Operations" block advertised `app.memory.keys(pattern="*")` and
+`app.memory.clear(pattern="*")`. Neither exists: the property returns a
+`MemoryInterface`, whose methods are get/set/delete/exists/set_vector/
+delete_vector/similarity_search plus the session/actor/workflow/global_scope
+accessors and on_change. `list_keys` lives on the scoped clients, not on
+`app.memory`, so it is now shown through an accessor.
+
+Every value operation is a coroutine, so the list and the runnable Example
+block now await them (and the example skill is `async def`). `set`'s second
+parameter is `data`, not `value`, and get/set/delete all take `scope` and
+`scope_id`; the cited signatures now match `inspect.signature`.
+
+The preamble claimed memory is "automatically scoped by ... Agent node ID",
+which contradicted the same docstring's "There is no Agent or Run scope".
+X-Agent-Node-ID is attribution on the emitted memory change event; `getScopeID`
+in the control-plane handler never reads it. Replaced with what actually
+selects a scope: the X-Workflow-ID / X-Session-ID / X-Actor-ID headers, and the
+workflow -> session -> actor -> global walk for an unscoped read.
+
+Docs only — no behaviour change.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* docs(sdk/python): drop the non-existent 'reasoner' memory scope from ai() docs
+
+`Agent.ai` and `AgentAI.ai` both documented `memory_scope` as
+"e.g., ['workflow', 'session', 'reasoner']". There is no reasoner scope in the
+request contract: the Python SDK's `_VALID_SCOPES` is
+('global', 'session', 'actor', 'workflow') and the control plane's `getScopeID`
+only keys off X-Workflow-ID / X-Session-ID / X-Actor-ID plus the fixed "global"
+id. (Local storage does pre-create a vestigial `reasoner` BoltDB bucket, but it
+has no header case, is never walked by a hierarchical read, and is rejected by
+the SDK.)
+
+Both docstrings now name the four real scopes. They also note that
+`memory_scope` is accepted but not yet applied — `agent_ai.py` still carries
+the "TODO: Integrate memory injection based on memory_scope" placeholder and
+never reads the argument.
+
+Docs only — no behaviour change.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* docs: say where an unscoped memory write lands, and fix the primitives snapshot's memory section
+
+The Agent.memory preamble described a write-scope fallback chain
+(workflow -> session -> actor -> global) whose last three branches cannot be
+reached from this SDK: ExecutionContext.to_headers() always sends
+X-Workflow-ID, falling back to the run id, so an unscoped write from a
+reasoner lands in the workflow scope of that run. State that, and what to do
+when a value must outlive one run.
+
+The shipped primitives snapshot (skills/ and its byte-identical mirror embedded
+in the server binary) still taught the same wrong material this PR corrects
+elsewhere: a `reasoner` memory_scope example, invented `agent`/`run` scopes,
+and app.memory calls that raise (`exists(key, scope=...)`,
+`list_keys(scope=...)`, `search_vectors`). Replace the section with the four
+real scopes, their headers, and calls that exist.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com>
+Co-authored-by: Cursor Agent <cursoragent@cursor.com>
+Co-authored-by: Santosh kumar <santoshkumarradha@users.noreply.github.com> (1a3cc1f)
+
+
+
+### Other
+
+- Desktop: make Railway image auto-updates real — set the policy through the environment config and show Railway's live state (#974)
+
+* desktop: set Railway image auto-updates through the environment config, and read them back
+
+The desktop set the maintenance window with serviceInstanceAutoUpdateScheduleUpdate,
+which Railway documents as leaving the update policy untouched. On a service where the
+policy was never enabled Railway answers "Auto updates are not enabled for this service",
+and the empty schedule sent for "Off" is rejected outright. The policy is not a typed
+field of the public schema; Railway's dashboard and `railway config apply` write it
+through the environment config document.
+
+- setImageAutoUpdates commits a patch containing only services.<id>.source.autoUpdates:
+  Off -> { type: "disabled" } (no schedule); other modes -> { type: "patch" | "minor",
+  schedule } using the existing window tables. Verified against a live service: the
+  config reads back as written and no redeploy is triggered.
+- getEnvironmentConfigAutoUpdates reads environment(id).config and keeps only the
+  autoUpdates object; the document (which carries service variables) never leaves main.
+  A missing environment or service is a read failure, not "not set".
+- getCloudAutoUpdateState classifies the live policy (not set / off / nightly /
+  weekends / anytime / custom, with the policy) and returns the resolved service id;
+  new IPC agentfield:cloud-auto-update-get.
+- Deploys read before they write: first deploy (or nothing usable stored) -> Nightly;
+  re-run deploy writes the stored mode only when Railway has no policy, otherwise leaves
+  the Railway-side policy alone, reports it and caches it as the offline fallback. A failed
+  read never blocks an explicit user write and never erases the cached preference.
+- Every Railway failure carries a deep link to the service's Railway settings; the deploy
+  IPC result carries the auto-update outcome explicitly and is typed.
+- Railway GraphQL requests time out after 20 s, including during the body read.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* desktop: show Railway's real image auto-update state in the Remote panel
+
+The "Railway image updates" select displayed the preference stored by the desktop,
+never what Railway had. It now reads the live state on mount, on control-plane
+changes and after every change or deploy; a policy set in Railway that is not one of
+ours shows as "Custom — set in Railway"; loading, read failures and in-flight writes
+each have their own placeholder and hint ("Checking Railway…", "Current window
+unknown — choose one to set it" with the last known window, "Saving to Railway…");
+Railway failures render an "Open Railway settings" link; feedback is keyed to the
+connected control plane so it cannot be re-attributed after a switch or deploy.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* docs(railway): describe how Desktop manages image auto-updates
+
+The README claimed Desktop enables Railway Image Auto Updates with the Nightly window
+after a deploy; the schedule call it used cannot enable the policy. Describe the
+patch policy, the mode mapping, the read-before-write deploy rule, the loading and
+fallback states, and where the same setting lives in Railway.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (156619d)
+
+
+
+### Testing
+
+- Test(control-plane): make the UI service storage stub safe for concurrent StatusManager calls (#973)
+
+UIService.RefreshAllNodeStatus fans a node refresh out across up to five
+goroutines, each of which calls into storage via StatusManager. Production
+storage backends are safe under that; the uiStorageStub test double was not —
+it wrote updatedHealth/updatedLifecycle/updatedHeartbeat (with lazy make())
+and mutated agentsByID entries with no synchronisation. That took down an
+unrelated PR's coverage job with "fatal error: concurrent map writes" inside
+uiStorageStub.UpdateAgentHealth.
+
+Guard every stub method with a sync.Mutex, lazy-init the maps under the lock,
+and add healthFor/lifecycleFor/heartbeatFor accessors so assertions read the
+recorded values through the same lock instead of touching the maps directly.
+
+Test-only change; no production code touched.
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (936f15f)
+
 ## [0.1.135-rc.4] - 2026-08-26
 
 
