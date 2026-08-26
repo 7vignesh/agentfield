@@ -6,6 +6,936 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.135-rc.6] - 2026-08-26
+
+
+### Fixed
+
+- Fix(control-plane): honor AGENTFIELD_LOG_LEVEL in the af binary, stop double request logging, keep agent response bodies out of logs (#965)
+
+* fix(control-plane): honor the configured log level in the af binary and stop double request logging
+
+Every released binary and the cloud image are built from cmd/af, whose
+server path never applied cfg.Logging.Level — only cmd/agentfield-server
+did. AGENTFIELD_LOG_LEVEL and logging.level in agentfield.yaml were
+therefore inert in every shipped build and the control plane was pinned
+to info. cmd/af now re-initializes the logger from the configured level
+right after config load, with --verbose still taking precedence over env
+and YAML.
+
+The router was also built with gin.Default(), so gin's own plaintext
+logger ran alongside the structured GinLogger middleware and every
+request was logged twice. The router is now gin.New() + Recovery; gin's
+mode — and with it the [GIN-debug] route table — is still left to
+GIN_MODE.
+
+With gin's logger gone, GinLogger picks its severity from the response
+status — under 400 at debug, 4xx at warn, 5xx at error — so operators
+still see failing requests at the default info level while successful
+traffic stays quiet.
+
+Fixes #557
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(control-plane): keep agent response bodies out of logs when redaction is on
+
+logging.redact_payloads (default true) already keeps execution inputs and
+outputs out of structured log events, but two sites logged a raw agent
+response body regardless: the reasoner handler printed up to 1KB of an
+undecodable response at ERROR, and the serverless call path printed the
+same preview at DEBUG. On a hosted control plane that put customer data
+on stdout even with redaction enabled.
+
+Both now go through annotateBodyForLog, which follows the same switch:
+with redaction on it records the response content type, the body length
+and the first 8 hex characters of the body's SHA-256 — enough to spot a
+repeat failure and to find the payload in the database — and with
+redaction explicitly off it keeps the previous truncated preview.
+
+Fixes #559
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* docs(env): document the logging variables and correct the connector capability names
+
+docs/ENVIRONMENT_VARIABLES.md had no logging section at all, so
+AGENTFIELD_LOG_LEVEL and AGENTFIELD_LOG_REDACT_PAYLOADS were undiscoverable.
+Both are now documented alongside their YAML equivalents and the severity
+each request status is logged at.
+
+.env.example and CLAUDE.md advertised a bare LOG_LEVEL, which nothing in the
+control plane reads; they now name AGENTFIELD_LOG_LEVEL.
+
+The connector section documented AGENTFIELD_CONNECTOR_CAPABILITIES as a
+comma-separated list defaulting to "all", with capability names
+(reasoners:read, versions:write, restart) that do not exist. The real
+interface is one AGENTFIELD_CONNECTOR_CAP_* variable per capability taking
+true/readonly/false, and an unset capability is disabled, not granted.
+
+Refs #557
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(control-plane): bind the af log-level wiring to a test and share it with agentfield-server
+
+Review found the #557 fix untested: the contract tests drove
+applyConfiguredLogLevel against a cobra tree the test built itself, so
+deleting the call from runServer — or moving --verbose off the root's
+persistent flags — left ./cmd/af green.
+
+The precedence helper now lives in internal/cli next to NewRootCommand and
+is exercised against the *real* command tree, so de-persisting --verbose
+fails the suite. The af server's use of it is bound by construction:
+loadServerConfig returns the config and applies its level in the same call,
+so runServer cannot obtain a config without the level having taken effect.
+Both mutations were verified to fail before this commit landed.
+
+cmd/agentfield-server now calls the same helper. It previously applied
+cfg.Logging.Level unconditionally, so env/YAML beat --verbose there while
+--verbose won in cmd/af; the two shipped binaries now agree.
+
+Refs #557
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(control-plane): log missing routes at info instead of warn
+
+Mapping every 4xx to warn turned routine noise into operator alarms: on a
+live run at AGENTFIELD_LOG_LEVEL=warn, GET /ui/ before the UI is built and
+GET /favicon.ico each emitted a warning, and so would every scanner probe
+against a hosted control plane. That works against the "clean cloud logs at
+>= WARNING" ask in #559.
+
+A request for a route that does not exist is the caller's problem, so 404 is
+now logged at info: still visible at the default level, never at a level
+alerting is keyed on. The 4xx that do indicate a misconfigured client or
+deployment — 400, 401, 403, 422 — stay at warn.
+
+Refs #557
+Refs #559
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(control-plane): key the redacted body digest and bound the logged content type
+
+Review raised three things about the redacted body annotation:
+
+An 8-hex-character SHA-256 prefix is an unsalted 32-bit commitment to the
+plaintext. That is fine for a large HTML error page, but this switch exists
+to protect caller data: a short, low-entropy body — a one-time code, an
+email address, a bare token — could be recovered offline by hashing
+candidates and matching, with body_bytes to prune the search. The digest is
+now an HMAC-SHA256 under a 32-byte key minted once per process, and the
+prefix is 16 hex characters, so repeats still correlate within a run of the
+control plane but nothing can be confirmed from the log alone. The field is
+renamed body_sha256 -> body_digest, since it is no longer a plain hash.
+
+annotateBodyForLog read the package-level redaction global even at the
+callAgent site, where the controller has its own redactPayloads field that
+every other site in execute.go uses. It now takes the setting as an
+argument, so a future per-controller override cannot silently skip the one
+site handling caller payloads.
+
+The response Content-Type is agent-controlled and Go accepts response
+headers up to megabytes, making it the only unbounded field in the new path.
+It is now reduced to its media type and truncated at 128 characters.
+
+Refs #559
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(control-plane): log panics after Recovery by keeping GinLogger outer
+
+gin.Default() installs Logger then Recovery so a 500 still gets a request
+line. newRouter() had registered Recovery first, which swallowed the
+panic before GinLogger could emit http_request. Install Recovery
+immediately after GinLogger via a shared helper and assert a panicking
+handler produces one error-level http_request with status 500.
+
+Co-authored-by: Santosh kumar <santoshkumarradha@users.noreply.github.com>
+
+* fix(control-plane): log requests CORS rejects before they reach a route
+
+Review found a hole opened by dropping gin.Default(): the structured request
+logger was installed in applyGlobalMiddleware *after* cors.New(), and gin runs
+middleware in registration order. gin-contrib/cors answers a disallowed Origin
+with c.AbortWithStatus(403) and an OPTIONS preflight with an abort too, so
+neither ever reached GinLogger — a rejected cross-origin request was invisible
+at every log level, including debug. On main, gin.Default() attached its own
+logger at engine creation, so those 403s were at least printed.
+
+Move the logging pair onto the bare engine in newRouter(). The logger is then
+outermost by construction rather than by the position of one line inside
+applyGlobalMiddleware, so no middleware added later — CORS, auth, timeouts —
+can abort a request out from under it. Recovery stays inner to GinLogger, so a
+panicking handler still emits http_request at error/500.
+
+Four tests drive the production construction (newRouter + applyGlobalMiddleware
+with CORS narrowed to one origin): a disallowed Origin gets 403 and exactly one
+warn line, a rejected preflight likewise, a CORS-answered preflight gets 204 and
+one debug line, and an allowed cross-origin request is unchanged. All four fail
+when the pre-fix ordering is restored.
+
+docs/ENVIRONMENT_VARIABLES.md said failures stay visible at the default level;
+that is now true for CORS rejections as well, and says so.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(control-plane): report an unrecognized log level instead of silently using info
+
+Review found the other half of "the level is ignored": now that the af binary
+honours AGENTFIELD_LOG_LEVEL / logging.level, a typo in it is worse than before,
+because the operator has every reason to believe the setting works. ParseLevel
+maps anything it does not recognize to info, so `AGENTFIELD_LOG_LEVEL=warm`
+started a server at info with no indication that the value was rejected —
+indistinguishable from a correctly-honoured `info`.
+
+logger gains ParseLevelStrict, which returns the same level plus whether the
+string was recognized, and AcceptedLevels for operator-facing messages.
+ParseLevel now delegates to it and is behaviourally identical, so no other
+caller changes. ApplyConfiguredLogLevel uses the strict form to emit one warn
+line naming the offending value and the accepted set before falling back to
+info; a bad value still never stops the server from starting.
+
+--verbose keeps short-circuiting ahead of the config level, so nothing falls
+back there and nothing is reported — covered by a test that says so.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com>
+Co-authored-by: Cursor Agent <cursoragent@cursor.com>
+Co-authored-by: Santosh kumar <santoshkumarradha@users.noreply.github.com> (02416e6)
+
+- Fix(sdk/python): dispatch execution logs without a throwaway loop, and finish AsyncExecutionManager teardown when a cancel raises (#972)
+
+* fix(sdk/python): dispatch execution logs without a throwaway event loop
+
+AgentFieldLogger._dispatch_to_cp hand-rolled both halves of
+run_async.fire_and_forget, and got both wrong.
+
+On a running loop it used a bare loop.create_task() with no reference kept.
+asyncio holds only a weak reference to a task, so the dispatch could be
+collected mid-flight and silently never complete — the bug #902 fixed
+everywhere else.
+
+With no running loop it spawned a daemon thread that built a *fresh* event
+loop per log record, drove the client's shared httpx.AsyncClient on it, and
+closed it. An httpx.AsyncClient keeps its pooled connections (and the anyio
+primitives guarding them) on the loop that opened them, so this left the
+shared pool attached to a dead loop. Verified against httpx 0.28.1 /
+httpcore 1.0.9:
+
+  * log first, then the agent's own loop -> the agent's next request raises
+    RuntimeError: Event loop is closed;
+  * agent's loop first, then a log -> the dispatch raises "... is bound to a
+    different event loop" and post_execution_logs swallows it, dropping the
+    record.
+
+Three changes, one root cause:
+
+  * logger: route the dispatch through fire_and_forget and delete
+    _dispatch_sync. Nothing propagates to the caller; a failure is logged at
+    debug.
+  * run_async: fire_and_forget's no-running-loop branch now hands work to a
+    single long-lived background loop instead of creating and closing one per
+    call, so nothing the coroutine binds is ever stranded on a dead loop. A
+    one-shot loop remains as a fallback if that loop cannot be started.
+  * client: get_async_http_client() is loop-affine. A client is only reused on
+    the loop that created it; another loop gets its own, and a client whose
+    loop has closed is never handed out again. This is what actually stops the
+    two failures above — a shared background loop alone would only swap
+    "Event loop is closed" for "bound to a different event loop".
+
+Refs #620, #902
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(sdk/python): finish AsyncExecutionManager teardown when a cancel raises
+
+stop() runs two cancel sweeps — the four background tasks, then the active
+executions — and each sat inside a single try. The first cancel that raised
+therefore abandoned the rest of its sweep, while the surrounding finally went
+on to null out the task references. The tasks behind the failure were left
+pending *and* unreachable, and the executions behind it stayed QUEUED with
+their capacity slots held.
+
+Each iteration now has its own guard. The first failure is remembered and
+re-raised once both sweeps and the downstream teardown (connection_manager,
+result_cache) have been attempted, so a caller still sees the error but
+nothing is stranded. The guard catches BaseException rather than Exception on
+purpose: narrowing it would let a CancelledError skip the cleanup below,
+which is the regression the finally-based structure from #909 exists to
+prevent.
+
+The cross-loop cancel path gets the same per-execution guard. It runs
+detached on the owning loop with no caller to raise to, so its first failure
+is logged at debug instead.
+
+Refs #620, #909
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* chore(sdk/python): drop the one per-file-ignore ASYNC240 no longer suppresses
+
+tests/test_harness_runner.py has no os.path/pathlib call left in an async
+function, so its ASYNC240 entry suppresses nothing. Its ASYNC230 entry still
+does (five blocking open() calls), and so do the ASYNC240 entries on the other
+six files, which remain untouched.
+
+Worth recording why they stay: ASYNC240 left preview in ruff 0.15.0, and CI
+pins ruff==0.15.22, so under the pinned linter those entries are live rather
+than dead weight. Removing them all reintroduces 12 errors:
+
+  agentfield/agent_ai.py 2, agentfield/harness/_runner.py 3,
+  agentfield/harness/providers/opencode.py 1, agentfield/media_providers.py 1,
+  tests/debug_complex_json.py 4, tests/test_harness_functional.py 1
+
+Refs #620
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(sdk/python): keep the agent loop as the primary httpx client owner and make client construction loop-safe
+
+Making get_async_http_client() loop-affine fixed the crash but left ownership
+to a race, and the race had a predictable loser.
+
+The first loop to ask claimed the primary slot. In this branch's own scenario
+-- a structured log emitted from sync code before the agent's first async
+request -- that loop is the SDK's background dispatch loop. From then on the
+agent's real loop was permanently on the per-loop path: aclose() was a
+cross-loop aclose() against the background loop's client, the agent's own
+client (holding the live keep-alive pool) was never closed but merely dropped
+by .clear(), and the reclaim branch keyed on owning_loop.is_closed() could
+never fire because the background loop lives for the whole process.
+
+Ownership is now deliberate. run_async grows background_dispatch_loop(),
+which reports the shared loop only if it is already running and never starts
+one, and get_async_http_client() skips the primary branch when the caller is
+that loop, so background dispatch always lands in the per-loop table.
+aclose() additionally closes the per-loop client belonging to the loop it is
+called on -- a same-loop await -- before dropping the rest.
+
+The construction guard was an asyncio.Lock created on demand in the branch
+where nobody owns the slot yet, so it could be created by one loop and
+awaited by another ("... is bound to a different event loop"). Building a
+client never awaits, so the guard is now a plain threading.Lock held across
+the whole pick-or-build. In the pre-fix run the new test for this did not
+even reach that error: the two loops were handed the same AsyncClient, which
+is exactly the corruption the loop-affinity work exists to prevent.
+
+_async_http_client_lock is therefore created in __init__ and never replaced,
+so the two pre-existing "assert ... _async_http_client_lock is None" checks
+after aclose() no longer describe anything. They become
+"assert client._async_http_client_loop is None" -- the slot is free again for
+the next loop to own, which is what those assertions were reaching for.
+
+All three new tests fail against the branch as it stood before this commit.
+
+Refs #620
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(sdk/python): evict per-loop httpx clients whose event loop has closed
+
+The per-loop client table added in this PR is a WeakKeyDictionary keyed by
+event loop, with a comment claiming "a finished loop's client is collected
+with it". That is not true. An httpx.AsyncClient reaches back to the loop it
+opened its pool on through the anyio streams its transport holds, so every
+value keeps its own weak key alive and no entry is ever collected. Each
+short-lived loop that touches the client therefore adds one client — and its
+keep-alive sockets — for the life of the process.
+
+Measured against a live control plane with real httpx, 50 throwaway loops:
+50 entries retained and 60 open fds, versus 1 entry and 11 fds after this
+change.
+
+Entries whose loop has closed are now dropped on the ordinary path — the next
+foreign-loop caller sweeps them — and the comment says what the table actually
+does. They are dropped, not closed: aclose() awaits against a pool only the
+loop that opened it can drive, and that loop is gone. Dropping the last
+reference is what lets the sockets be reclaimed at all.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(sdk/python): treat the last-resort dispatch loop as a dispatch loop too
+
+get_async_http_client() keeps the SDK's shared background loop out of the
+primary client slot by asking background_dispatch_loop() whether the caller is
+that loop. But _submit_to_background_loop has a second path: when the shared
+loop cannot be started at all it runs the work on a one-shot loop of its own,
+and that loop was not recognised. It could therefore claim the primary slot on
+its way past and then close — leaving the agent's own loop permanently on the
+per-loop path against a client whose loop is dead. That is #620 again, in the
+branch added to fix it.
+
+run_async now keeps a WeakSet of every loop it dispatches best-effort work on
+— the shared loop and any fallback loop, the fallback registered before its
+first await — and exposes is_background_dispatch_loop(loop). Asking still
+never starts a loop. client.py asks that instead, so both kinds of dispatch
+loop land in the per-loop table where they belong.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(sdk/python): stop a background loop that never signalled it had started
+
+_background_loop() publishes _BACKGROUND_LOOP only after the loop reports
+ready. When that wait timed out it returned None and walked away from a loop
+and thread nobody held a reference to any more — and the next call created
+another one beside it, and the one after that a third, none of them ever
+reachable or stoppable.
+
+On timeout the loop is now stopped (best effort), which makes run_forever
+return — immediately, if it has not started yet — and run_forever's new
+finally closes the loop, so the thread ends. Callers still get None and fall
+back exactly as before.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(sdk/python): close every client in aclose() even when one of them raises
+
+aclose() ends with `for client in (primary, mine): await client.aclose()`.
+Both slots are already cleared under the lock by then, so a client the loop
+never reaches is one nothing will ever close — if the primary's aclose()
+raised, the per-loop client belonging to the very loop calling aclose() was
+abandoned with its pool open.
+
+Each close is now attempted on its own, and the first failure is re-raised
+once both have been tried, so the caller still sees the error that happened
+first.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (357aae7)
+
+- Fix(sdk/go,sdk/typescript): refuse OpenRouter audio formats that cannot work (#968)
+
+* fix(sdk/go): request non-pcm16 OpenRouter audio without streaming
+
+OpenRouter's chat-completions audio stream only emits pcm16 deltas.
+Asking for mp3/flac/opus with stream=true is rejected upstream with a
+400 ("'audio.format' does not support 'mp3' when stream=true"), so
+GenerateAudio could never return those formats from a gpt-audio model.
+
+Select the transport from the wire format: pcm16 (and wav, which is
+wired as pcm16 and re-wrapped into RIFF/WAVE client-side) keeps the SSE
+path; every other format is sent with stream=false and read out of the
+single JSON body at choices[0].message.audio.{data,transcript}. The
+non-stream read is bounded by maxAudioResponseBytes, refusing both an
+oversized declared Content-Length and a chunked body that runs past the
+cap, so a large response is never buffered without bound.
+
+Existing chat-audio tests that stood in for the SSE path now request
+pcm16; the custom-format integration test asserts the new stream=false
+payload.
+
+Refs #584
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(sdk/typescript): request non-pcm16 OpenRouter audio without streaming
+
+OpenRouter's chat-completions audio stream only emits pcm16 deltas.
+Asking for mp3/flac/opus with stream=true is rejected upstream with a
+400 ("'audio.format' does not support 'mp3' when stream=true"), so
+generateAudio could never return those formats from a gpt-audio model.
+
+Select the transport from the wire format, mirroring the Go SDK: pcm16
+(and wav, which is wired as pcm16 and re-wrapped into RIFF/WAVE
+client-side) keeps the SSE path; every other format is sent with
+stream=false and read out of the single JSON body at
+choices[0].message.audio.{data,transcript}. The non-stream body is read
+through a byte limit that refuses both an oversized declared
+Content-Length and a chunked body that runs past the cap, so a large
+response is never buffered without bound.
+
+Existing chat-audio tests that stood in for the SSE path now request
+pcm16; the custom-format integration test asserts the new stream:false
+payload.
+
+Refs #584
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(sdk/typescript): give non-streaming audio its own timeout and test the streamed-body decode path
+
+The non-streaming chat-completions audio request inherited API_TIMEOUT
+(30s) from post(). The SSE path streams deltas so bytes keep arriving
+inside that window, but a non-streaming request returns nothing until
+the whole clip is synthesised — a paragraph of mp3 aborted at 30s with
+an opaque TimeoutError, exactly the case this path exists to serve.
+
+Give it NONSTREAM_AUDIO_TIMEOUT (300s, matching the Python SDK's
+non-streaming audio budget) via an optional post() parameter; the SSE
+path and every other caller keep API_TIMEOUT.
+
+Also cover the two gaps the existing tests left: every green
+non-streaming test mocked fetch with text() and no body, so
+readLimitedText's incremental res.body.getReader() decode was never
+exercised. Adds a test driving a real Response(ReadableStream) whose
+7-byte chunks cut a 2-byte "é" and a 4-byte emoji mid-sequence, and a
+test asserting the non-streaming request gets 300s while the streaming
+one still gets 30s.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(sdk/go): lift the client timeout for non-streaming audio synthesis
+
+generateAudioViaChatJSON ran on p.Client, whose constructor default is a
+60s whole-request timeout. http.Client.Timeout caps the request
+regardless of the caller's context, so a non-streaming synthesis — which
+returns nothing until the entire clip is rendered — was aborted at 60s
+on any clip longer than a sentence or two.
+
+Run that one request on a copy of the client whose timeout floor is
+nonStreamAudioTimeout (5min), matching the TypeScript and Python SDKs.
+p.Client is left untouched, so the SSE audio path, video polling and the
+speech endpoint keep their configured timeout; a client with no timeout
+still has none, and caller context cancellation still applies.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(sdk/typescript): fall back from empty audio transcripts and cancel oversized bodies
+
+Treat an empty transcript as absent so message content is still used,
+matching the Go SDK. Cancel the response body when a declared
+Content-Length exceeds the cap, as the chunked path already does.
+
+Co-authored-by: Santosh kumar <santoshkumarradha@users.noreply.github.com>
+
+* fix(sdk/go): refuse chat-completions audio formats OpenRouter cannot deliver
+
+OpenRouter's chat-completions audio modality only ever returns pcm16.
+OpenAI rejects any other audio.format while streaming ("'audio.format'
+does not support 'mp3' when stream=true"), and the OpenRouter gateway
+rejects an audio completion that is not streamed at all ("Audio output
+requires stream: true") — reproduced live against openai/gpt-audio and
+openai/gpt-audio-mini with mp3, pcm16 and wav, and with
+modalities:["audio"] alone. There is no request shape that returns
+mp3/flac/opus from this route.
+
+GenerateAudio now fails before the HTTP call when the requested format
+is neither pcm16 nor wav, naming the requested format and the one the
+provider actually delivers, instead of relaying a 400 that blames a
+"stream" flag the caller never set. pcm16 and wav (the same samples
+wrapped into a RIFF/WAVE container client-side) keep the streaming path
+unchanged, and /audio/speech models such as hexgrad/kokoro-82m are
+untouched — they still serve mp3.
+
+This replaces the non-streaming JSON transport added earlier on this
+branch (generateAudioViaChatJSON, longAudioClient, nonStreamAudioTimeout,
+maxAudioResponseBytes and their tests): it turned one upstream 400 into a
+different one and could never succeed against the real gateway.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(sdk/typescript): refuse chat-completions audio formats OpenRouter cannot deliver
+
+Mirrors the Go SDK change. OpenRouter's chat-completions audio modality
+only ever returns pcm16: OpenAI rejects a non-pcm16 audio.format while
+streaming, and the OpenRouter gateway rejects an audio completion that is
+not streamed at all ("Audio output requires stream: true"). generateAudio
+now throws a MediaProviderError before the fetch when the requested
+format is neither pcm16 nor wav, naming the requested format and the one
+the provider actually delivers.
+
+pcm16 and wav (the same samples wrapped into a RIFF/WAVE container
+client-side) keep the SSE path unchanged, and TTS models on /audio/speech
+still serve mp3.
+
+This replaces the non-streaming JSON transport added earlier on this
+branch (parseNonStreamAudio, readLimitedText, NONSTREAM_AUDIO_TIMEOUT,
+MAX_AUDIO_RESPONSE_BYTES, post()'s timeout parameter and their tests): it
+turned one upstream 400 into a different one and could never succeed
+against the real gateway. The chunk-boundary decode coverage it added is
+kept, re-pointed at the SSE reader that is still on the live path — a
+multi-byte character cut across body chunks must not decode to U+FFFD.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com>
+Co-authored-by: Cursor Agent <cursoragent@cursor.com>
+Co-authored-by: Santosh kumar <santoshkumarradha@users.noreply.github.com> (88793e8)
+
+- Fix(sdk/python): stream all OpenRouter music requests and label audio by its real container (#963)
+
+* fix(sdk/python): route non-pcm16 music generation through the non-streaming OpenRouter path (#584)
+
+OpenRouterProvider.generate_music hardcoded "stream": True with a default
+format of "wav", so the default call reproduced #584's 400:
+
+    'audio.format' does not support 'wav' when stream=true.
+    Supported values are: 'pcm16'
+
+PR #962 fixed exactly this for generate_audio but left generate_music
+untouched. Apply the same routing here, reusing the helpers #962 added
+rather than duplicating them:
+
+- wav  -> request pcm16 over the wire, stream over SSE, then re-wrap the
+  pcm16 payload as a RIFF/WAVE container via _wrap_pcm16_as_wav_b64
+- pcm16 -> stream over SSE, returned base64 untouched
+- mp3 / flac / opus -> stream=False via _nonstream_openrouter_audio with
+  label="music"
+
+Everything else about generate_music is unchanged: prompt/duration-hint
+message shape, model resolution and openrouter/ prefix stripping,
+duration validation, and the returned MultimodalResponse fields.
+
+Two existing SSE tests requested the default wav format while asserting
+the raw streamed base64 — only the pcm16 wire path can return that, so
+they are pinned to format="pcm16" and now assert stream is True, the same
+treatment #962 gave the generate_audio tests.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(sdk/python): always stream generate_music and label it by the real container
+
+OpenRouter's music models reject a non-streaming audio request outright
+("Audio output requires stream: true"), so routing mp3/flac/opus through the
+non-streaming JSON path turned a working generate_music(format="mp3") into a
+hard 400. They also ignore audio.format entirely — google/lyria-3-* answers
+with MP3 whatever is asked for — so requesting pcm16 on behalf of a "wav"
+caller and then wrapping the reply in a RIFF/PCM16 header produced a WAV file
+with an MP3 inside it.
+
+generate_music now always streams, forwards the caller's format untouched, and
+derives the label from the bytes that come back: ID3 / MPEG frame sync -> mp3,
+RIFF+WAVE -> wav, fLaC -> flac, OggS -> ogg. A payload with no container
+signature is raw PCM16 and is wrapped as 24 kHz mono WAV only when wav was
+requested; otherwise it passes through. A single warning naming both the
+detected container and the requested format is logged on a mismatch.
+
+Also fixes the default model id: google/lyria-3-pro is not a valid OpenRouter
+model, the live id is google/lyria-3-pro-preview — generate_music() with no
+model 400s today. Drops the docstrings' "48kHz stereo" claim (lyria returns
+44.1 kHz stereo MP3).
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(sdk/python): reject audio formats OpenRouter cannot deliver instead of 400ing
+
+The OpenRouter gateway rejects `stream: false` for *any* audio-output chat
+request — the response is a 400 with provider_name null, so it is the gateway
+and not the model — while the streaming transport only ever emits pcm16
+deltas. There is therefore no combination that returns mp3/flac/opus from a
+chat-audio model, and the non-streaming JSON path #962 added could never
+succeed.
+
+generate_audio now raises ValueError for any chat-audio format other than
+pcm16/wav before the request is sent, naming the requested format and saying
+that pcm16 is all that route delivers (wav being wrapped client-side). The
+/audio/speech route is untouched and still serves mp3/flac/opus/aac natively,
+and the wav-via-pcm16 behaviour is unchanged. `_nonstream_openrouter_audio`
+and its tests are removed — nothing calls it any more.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(sdk/python): label container-less music audio as pcm16, and treat opus/ogg as one answer
+
+Raw PCM16 frames that the caller asked for as mp3 were being handed back
+labelled "mp3" - the one place where the requested format still won over the
+bytes, contrary to the rule this change introduces. Label them "pcm16" and
+keep the single mismatch warning.
+
+Opus travels in an Ogg container, and "pcm" is the same frames as "pcm16", so
+an OggS answer to format="opus" (or raw PCM to format="pcm") is not a mismatch
+and no longer warns.
+
+The generate_music docstring examples still saved to "jazz.wav" two lines
+under the text explaining that Lyria always returns MP3; save under the
+detected format instead.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (2c0766d)
+
+- Fix(sdk/python): retry OpenRouter image 404s on the provider path and guard data: URLs in all media outputs (#967)
+
+* fix(sdk/python): retry OpenRouter "no endpoints" 404s on the provider path
+
+PR #600 added a bounded retry for OpenRouter's "No endpoints found that
+support the requested output modalities" 404 inside
+vision.generate_image_openrouter. PR #619 then rewrote
+OpenRouterProvider.generate_image as a direct aiohttp POST and dropped the
+delegation to that function, so the retry became dead code on the path users
+actually hit: app.ai_generate_image -> MediaRouter -> OpenRouterProvider.
+generate_image, which raised RuntimeError on the very first 404.
+
+Port the behaviour to the provider. The marker is now matched against the 404
+response body (this path raises RuntimeError, not litellm.NotFoundError): up to
+3 attempts with a 1s/2s backoff, then — only when the caller passed a non-empty
+image_config — one final attempt with image_config stripped plus a warning. Any
+other status, or a 404 without the marker, still raises on the first response
+with no retry.
+
+The marker, attempt count and backoff schedule move to a new neutral module,
+agentfield/openrouter_retry.py, shared by both paths; its sleep() indirection
+keeps the backoff patchable so tests do not wait real seconds.
+vision.generate_image_openrouter behaviour is unchanged.
+
+Fixes #586
+Fixes #588
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* test(sdk/python): cover ImageOutput data: URL decoding
+
+Issue #587 (ImageOutput.save() crashing on the data: URLs Gemini image models
+return) was fixed without a regression test — deleting the data: branch from
+ImageOutput.get_bytes left the suite green.
+
+Pin the behaviour: a data: URL decodes to its inline bytes through get_bytes()
+and save(), with requests.get() rigged to fail if it is reached, and http(s)
+URLs still download.
+
+Refs #587
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(sdk/python): decode data: URLs in FileOutput, VideoOutput and Audio.from_url
+
+ImageOutput learned to decode inline data: URLs when #587 was fixed, but its
+siblings kept handing the URL straight to requests.get, which raises
+InvalidSchema for a data: URL. FileOutput.save/get_bytes,
+VideoOutput.save/get_bytes and multimodal.Audio.from_url all hit that path
+whenever a model returns its output inline — the same failure #587 describes,
+just on a different output type.
+
+Give all of them the same guard: decode the inline payload locally, leave the
+http(s) branch (including VideoOutput's 120s download timeout) untouched. The
+decode itself moves to a new dependency-free helper, agentfield/data_url.py,
+so the four call sites share one definition of what a data: URL is.
+
+Refs #587
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(sdk/python): reject non-base64 data: URLs instead of decoding them silently
+
+`is_data_url` matched any `data:` URL while `decode_data_url` assumed a base64
+payload, so a malformed or non-base64 `data:` URL decoded to the wrong bytes
+without complaint: `FileOutput(url="data:image/png").get_bytes()` returned `b""`
+and `"data:text/plain,hello"` returned garbage. Before the media outputs learned
+to handle `data:` URLs at all, both of those reached `requests` and raised a
+loud `InvalidSchema` — trading that for silently-empty bytes is a worse failure
+mode than the bug it was fixing.
+
+`decode_data_url` now partitions on the first `,` and raises `ValueError` unless
+a separator is present and the metadata head declares `;base64`; only that head
+is echoed in the message, never the payload. Decoding uses `validate=True` so a
+corrupt payload raises `binascii.Error` rather than dropping the stray
+characters and returning short bytes. `is_data_url` matches the scheme
+case-insensitively per RFC 3986 3.1, so `DATA:image/png;base64,...` decodes
+instead of being handed to `requests`.
+
+Well-formed base64 `data:` URLs are unaffected. Tests cover both rejections and
+the case-insensitive scheme once per consumer — `ImageOutput`, `FileOutput`,
+`VideoOutput` and `Audio.from_url` — so none of them can regress alone.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(sdk/python): route vision image retries through openrouter_retry helpers
+
+Use is_no_endpoints_error and openrouter_retry.sleep on the LiteLLM
+path so the marker and backoff cannot drift from the provider path.
+Pin the strip-attempt sleep at 4s in the provider tests.
+
+Co-authored-by: Santosh kumar <santoshkumarradha@users.noreply.github.com>
+
+* fix(sdk/python): decode data: URLs strictly without rejecting layout whitespace
+
+The first cut of `decode_data_url` traded one silent-wrong-answer for two
+loud-wrong-answers:
+
+- `base64.b64decode(payload, validate=True)` rejects every character outside
+  the base64 alphabet, and that includes ASCII whitespace. RFC 2045 encoders
+  wrap payloads at 76 columns, producers add a trailing newline or a space
+  after the comma, and the permissive decode this replaced accepted all of
+  them. The LiteLLM/vision path and the FAL and MiniMax providers build
+  url-only `ImageOutput`s straight from provider responses, so a wrapped
+  payload that worked before this branch would now raise. ASCII whitespace is
+  deleted from the payload before validation; a payload that is corrupt for
+  any other reason still raises `binascii.Error`.
+
+- `data:image/png;base64,` (declared base64, empty payload) decoded to `b""` —
+  precisely the silent empty-bytes failure the module docstring says it
+  prevents. An empty payload now raises `ValueError`, like the other
+  undecodable forms.
+
+Also stop lower-casing the whole URL to test a five-character scheme.
+`is_data_url` runs on every `get_bytes()` / `save()` call and an inline image
+is routinely megabytes: `url.lower()` copied ~10 MB (~29 ms) per call for a
+10 MB payload. `url[:5].lower()` is O(1) and matches the same scheme casings.
+
+`data_url_mime_type` is added for callers that need the declared type.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(sdk/python): resolve media bytes before save() truncates the destination
+
+`ImageOutput.save`, `FileOutput.save` and `VideoOutput.save` all opened the
+destination with "wb" — which truncates on open — and only then decoded the
+`data:` URL or downloaded the http(s) one. So a payload that turns out to be
+undecodable, or a download that fails, destroys whatever the caller already
+had at that path: saving over an existing 820-byte file left it at 0 bytes.
+
+Losing the user's file is a worse outcome than the bad payload that caused it,
+and it is entirely avoidable: each save() now resolves its bytes first and
+opens the destination only once it has them. A failed save leaves an existing
+file byte-for-byte intact and creates no empty stub where there was no file.
+The success path is unchanged; the parent directory is now created after the
+bytes are in hand, so a failure no longer leaves an empty directory tree
+behind either.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(sdk/python): label inline audio with the format its data: URL declares
+
+`Audio.from_url` defaulted `format` to "wav" and passed it through untouched,
+so every inline payload was announced to the model as a WAV regardless of what
+the URL said it was: `Audio.from_url("data:audio/mpeg;base64,...")` produced
+`{"format": "wav"}` around MP3 bytes. The format is the declared encoding of
+those bytes, not a cosmetic label — a caller that decodes a `data:` URL has the
+MIME type right there and should not have to restate it.
+
+`format` is now `Optional[str] = None`. For a `data:` URL it is derived from
+the declared MIME type (audio/mpeg and audio/mp3 -> mp3; audio/wav, audio/x-wav
+and audio/wave -> wav; audio/flac -> flac; audio/ogg -> ogg), falling back to
+"wav" for an unmapped or absent type. http(s) URLs keep today's "wav" default,
+since the URL alone carries no reliable type. An explicit `format` always wins,
+so existing callers are unaffected. The module-level `audio_from_url` wrapper
+follows.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com>
+Co-authored-by: Cursor Agent <cursoragent@cursor.com>
+Co-authored-by: Santosh kumar <santoshkumarradha@users.noreply.github.com> (d7b4fc3)
+
+- Fix(sdk/python): stop probing cloud metadata / ipify when a callback URL is configured, add AGENTFIELD_DISABLE_IP_DETECTION (#969)
+
+* fix(sdk/python): stop probing cloud metadata when a callback URL is set
+
+Constructing an Agent() inside a container made _build_callback_candidates()
+call _detect_container_ip(), which fires HTTP requests at 169.254.169.254,
+metadata.google.internal and https://api.ipify.org. It did so even when the
+operator had already told the SDK where the control plane should call back,
+so on Kubernetes every agent start produced a burst of NetworkPolicy deny
+entries for egress nobody had asked for.
+
+The probe now only runs when it can still contribute something:
+
+- A callback URL configured through the `callback_url` constructor argument
+  or AGENT_CALLBACK_URL suppresses it. Such a URL always normalizes to the
+  first candidate and the control plane keeps the remaining candidates as
+  fallbacks, so the detected public IP could never have been selected. A
+  value that fails to normalize is not treated as configured, so malformed
+  input still falls back to full auto-detection.
+- AGENTFIELD_DISABLE_IP_DETECTION=1 (also `true`/`yes`, case-insensitive,
+  surrounding whitespace tolerated) suppresses it unconditionally, for
+  clusters that want the guarantee without pinning a URL.
+
+Everything else is untouched: the Railway internal hostname, the local
+network address, the container hostname, host.docker.internal and the
+localhost fallbacks are still offered, the probe still never runs outside a
+container, and with neither knob set the candidate list is what it was.
+
+Fixes #624
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* docs(env): document AGENTFIELD_DISABLE_IP_DETECTION
+
+Records the new opt-out under the Python SDK agents section, along with the
+fact that configuring a callback URL already suppresses the probe and which
+callback candidates remain when it is off.
+
+Refs #624
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* test(sdk/python): prove no metadata/ipify HTTP request is made when a callback URL is configured
+
+The existing opt-out tests stub `_detect_container_ip` itself, so they assert
+that the helper is not called. The symptom reported in #624 is one level
+lower: no HTTP request should leave the process. Those tests would still pass
+if the probe grew a second outbound call outside the helper.
+
+Add a test that leaves `_detect_container_ip` in place and puts a tripwire on
+`requests.get` — the helper's only outbound entry point, since it imports
+`requests` lazily and makes no other network call. It runs with
+`_is_running_in_container` forced True and covers all three configured forms:
+the `callback_url` argument, `AGENT_CALLBACK_URL`, and
+`AGENTFIELD_DISABLE_IP_DETECTION`.
+
+The tripwire records each attempt as well as raising `AssertionError`, because
+`_detect_container_ip` wraps every request in `except Exception: pass` and
+would swallow the raise. Verified against a locally reverted fix: all three
+parameters fail, and the recorded list shows all four probe targets attempted
+with the raise absorbed — so the recorded list, not the raise, is what gives
+the test teeth.
+
+A control test patches `requests.get` with a fake 200 response and asserts the
+probe does reach it when nothing is configured, pinning down that the tripwire
+would fire if the skip regressed.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* docs(env): describe AGENTFIELD_DISABLE_IP_DETECTION exactly
+
+The entry said the variable "is for clusters that want the guarantee
+without pinning a URL", which overstates what it changes today. Reading
+the SDK: _detect_container_ip() has exactly one caller
+(_build_callback_candidates), and in a running agent that function is
+only reached when the Agent was constructed with callback_url=... —
+Agent.__init__ resolves the callback URL eagerly only in that case, and
+AgentServer.serve() derives base_url itself (honouring AGENT_CALLBACK_URL
+directly) without touching callback discovery. So a stock agent with no
+callback URL never reaches the probe with or without the flag.
+
+Rewrite the entry so every sentence holds: what it disables (the probe at
+its single call site, container-only), when someone would actually set it
+(a guarantee that survives however the agent is wired, or code calling
+the discovery helpers directly), what it does NOT disable (the UDP
+socket.connect() toward 8.8.8.8 used to read the local source address,
+which sends no packets and does no DNS; registration and heartbeats are
+unaffected), and what it costs (only the public-IP candidate).
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* docs(sdk/python): make the callback-discovery docstrings precise
+
+Three wording fixes, no behaviour change:
+
+- _build_callback_candidates: say that _detect_container_ip is the only
+  step that puts a request on the wire (the local-IP lookup opens a
+  connectionless UDP socket and sends nothing), and that this function is
+  the probe's only call site, which is why AGENTFIELD_DISABLE_IP_DETECTION
+  suppresses it everywhere.
+- _detect_container_ip: name the single caller instead of "callers are
+  expected to", and mention the opt-out.
+- Agent.__init__: the previous wording implied AGENT_CALLBACK_URL takes
+  part in the constructor's resolution. It does not — __init__ resolves
+  only when the callback_url argument is supplied. Say that, and describe
+  AGENT_CALLBACK_URL's effect where it actually applies (any caller that
+  goes through callback discovery).
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (fe64d54)
+
 ## [0.1.135-rc.5] - 2026-08-26
 
 
