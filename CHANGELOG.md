@@ -6,6 +6,114 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.137-rc.1] - 2026-08-27
+
+
+### Added
+
+- Feat(ts-sdk): support multimodal AI request content (#980)
+
+* feat(ts-sdk): support multimodal AI request content
+
+* fix(ts-sdk): use mediaType for multimodal file parts and derive real MIME types
+
+The AI SDK pinned here (ai@6.0.149) requires `mediaType` on file parts;
+`mimeType` is the v4 name and is not accepted. Every Audio, Video and File
+part therefore failed prompt validation with AI_InvalidPromptError before a
+request was ever sent. Image parts were unaffected.
+
+- Emit `mediaType` instead of `mimeType` on all file parts.
+- Derive real IANA types instead of the `video/*` wildcard: from the data-URL
+  prefix when present, else the URL extension, else `video/mp4`.
+- Audio now uses the canonical table already in multimodal.ts, so mp3 maps to
+  `audio/mpeg` rather than `audio/mp3`.
+- `File.fromUrl()` without an explicit mime derives from the URL extension and
+  falls back to `application/octet-stream`, so mediaType is never undefined.
+- Drop the `as any` on the messages array and type it as `ModelMessage[]`, so
+  tsc catches a future key rename instead of silently shipping it.
+
+Verified against a stub LanguageModelV3 on the pinned SDK: image, audio, video
+and file parts all reach the model, in both URL-backed and data-URL variants.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com>
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (e5ee192)
+
+
+
+### Changed
+
+- Refactor(handlers): split execute.go into focused files (3048 -> 807 LOC) (#975)
+
+* refactor(handlers): split execute.go into focused files (3169 -> 807 LOC) (#412)
+
+Split the execute handler god file into logical units. Pure code
+movement, no behavior change, no renames, no new interfaces.
+
+Before: execute.go = 3169 lines, 74 functions
+After:
+  execute.go          =  807 lines (types, interfaces, controller, sync/async/status handlers)
+  execute_ard.go      =  278 lines (external ARD call handling)
+  execute_events.go   =  295 lines (event publishing, workflow status updates)
+  execute_prepare.go  =  412 lines (execution preparation, replay, target parsing)
+  execute_lifecycle.go=  460 lines (wait, callAgent, complete, fail, triggerWebhook)
+  execute_helpers.go  =  999 lines (headers, resolution, webhook normalization, error classification, async pool)
+
+All methods remain on *executionController. No import path changes
+for callers. Tests pass unchanged.
+
+* refactor(handlers): gofmt split files and reattach completionPollInterval doc comment
+
+Follow-up on the execute.go split. Two cosmetic leftovers from the move:
+
+- gofmt: execute.go picked up a double blank line where the moved
+  functions were cut out, and execute.go / execute_lifecycle.go /
+  execute_prepare.go each ended with a trailing blank line. The
+  merge-base execute.go was gofmt-clean, so this was new. Nothing in
+  CI catches it: the control-plane Lint step is continue-on-error and
+  golangci-lint's default linter set has no gofmt linter.
+
+- The completionPollInterval doc comment was left dangling at the end
+  of execute_events.go while the var it documents moved to
+  execute_lifecycle.go, losing its godoc. Reattached above the var.
+
+No behaviour change: a go/ast comparison of every top-level declaration
+against the merge-base execute.go is 108 decls before and after, zero
+missing, added or duplicated, all bodies byte-identical and now all doc
+comments identical too.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com>
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (f10854a)
+
+
+
+### Fixed
+
+- Fix(control-plane): mirror workflow execution events (#979)
+
+* fix(control-plane): mirror workflow execution events
+
+* test(control-plane): cover workflow event projection branches (3c9b862)
+
+- Fix(python-sdk): include PEP 561 type marker (#992)
+
+Signed-off-by: ump45nose <52391318+ump45nose@users.noreply.github.com> (be2b123)
+
+
+
+### Testing
+
+- Test(ts-sdk): cover restart execution client paths (#977) (05912b6)
+
+- Test(go-sdk): cover Gemini harness provider (#981) (9c88fe5)
+
 ## [0.1.136] - 2026-08-27
 
 ## [0.1.135] - 2026-08-27
