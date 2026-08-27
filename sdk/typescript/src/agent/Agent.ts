@@ -40,6 +40,7 @@ import { SkillContext } from '../context/SkillContext.js';
 import { AIClient } from '../ai/AIClient.js';
 import { AgentFieldClient } from '../client/AgentFieldClient.js';
 import type { HarnessRunner } from '../harness/runner.js';
+import { resolveProviderName } from '../harness/providers/factory.js';
 import type { HarnessOptions, HarnessResult } from '../harness/types.js';
 import { splitModelVariant } from '../harness/modelVariant.js';
 import { MemoryClient } from '../memory/MemoryClient.js';
@@ -412,7 +413,7 @@ export class Agent {
         return;
       }
 
-      const providerName = options?.provider ?? this.config.harnessConfig?.provider;
+      const providerName = resolveProviderName(options?.provider ?? this.config.harnessConfig?.provider);
       const harnessName = providerName ? String(providerName).replace(/-/g, '_') : null;
       // Usage is recorded against the base model — a "#variant"
       // reasoning-effort suffix on the configured model never reaches the

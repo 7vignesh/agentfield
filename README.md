@@ -251,7 +251,7 @@ Two examples already run at this load. The [deep-research engine](https://agentf
 
 - **[Reasoners & Skills](https://agentfield.ai/docs/build/building-blocks/reasoners?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-reasoners)** - `@app.reasoner()` for AI judgment, `@app.skill()` for deterministic code
 - **[Structured AI](https://agentfield.ai/docs/reference/sdks/python?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-structured-ai)** - `app.ai(schema=MyModel)` → typed Pydantic/Zod output from any LLM
-- **[Harness](https://agentfield.ai/docs/build/intelligence/harness?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-harness)** - `app.harness("Fix the bug")` dispatches multi-turn tasks to AForge, AgentField's own coding harness — no setup. Add `provider="claude-code"` (or `codex`, `gemini`, `opencode`) to orchestrate someone else's.
+- **[Harness](https://agentfield.ai/docs/build/intelligence/harness?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-harness)** - `app.harness("Fix the bug")` dispatches multi-turn tasks to AForge, AgentField's own coding harness — no setup. Add `provider="claude-code"` (or `codex`, `gemini`, `opencode`, `pi`, `omp`) to orchestrate someone else's.
 - **[Cross-Agent Calls](https://agentfield.ai/docs/build/coordination/cross-agent-calls?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-cross-agent-calls)** - `app.call("other-agent.func")` routes through the control plane with full tracing
 - **[Discovery](https://agentfield.ai/docs/reference/sdks/python?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-discovery)** - `app.discover(tags=["ml*"])` finds agents and capabilities across the mesh. `tools="discover"` lets LLMs auto-invoke them.
 - **[Memory](https://agentfield.ai/docs/build/coordination/shared-memory?utm_source=github-readme&utm_campaign=github-readme&utm_id=github-readme-memory)** - `app.memory.set()` / `.get()` / `.similarity_search()` - KV + vector search, four scopes, no Redis needed
@@ -284,7 +284,7 @@ Two examples already run at this load. The [deep-research engine](https://agentf
 |---|---|
 | Structured output (Pydantic/Zod) | `app.ai(schema=MyModel)` |
 | Multi-turn coding agents | `app.harness("task")` — AForge by default |
-| Orchestrate another harness | `app.harness("task", provider="claude-code")` |
+| Orchestrate another harness | `app.harness("task", provider="claude-code")` (also `codex`, `gemini`, `opencode`, `pi`, `omp`) |
 | LLM auto-discovers agents and tools | `app.ai(tools="discover")` |
 | Multimodal (text, image, audio) | `app.ai("Describe", image_url="...")` |
 | Streaming responses | `app.ai("...", stream=True)` |
@@ -381,7 +381,7 @@ Two examples already run at this load. The [deep-research engine](https://agentf
 | Feature | How |
 |---|---|
 | Zero-setup default harness | AForge (`aforge`), installed alongside `af` |
-| Swap the worker, keep the loop | `provider="claude-code"` \| `"codex"` \| `"gemini"` \| `"opencode"` |
+| Swap the worker, keep the loop | `provider="claude-code"` \| `"codex"` \| `"gemini"` \| `"opencode"` \| `"pi"` \| `"omp"` |
 | Fleet-wide default override | `AGENTFIELD_HARNESS_PROVIDER=codex` |
 | Schema-constrained output | `schema=ResultModel` (Pydantic/Zod) |
 | Cost capping | `max_budget_usd=3.0` |
