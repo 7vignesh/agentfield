@@ -31,6 +31,19 @@ type PayloadStore interface {
 	Remove(ctx context.Context, uri string) error
 }
 
+// NopPayloadStore is a no-op implementation of PayloadStore used when payloads
+// are persisted inline (e.g. in Postgres) and disk storage is unnecessary.
+type NopPayloadStore struct{}
+
+func (NopPayloadStore) SaveFromReader(context.Context, io.Reader) (*PayloadRecord, error) {
+	return nil, nil
+}
+func (NopPayloadStore) SaveBytes(context.Context, []byte) (*PayloadRecord, error) { return nil, nil }
+func (NopPayloadStore) Open(context.Context, string) (io.ReadCloser, error) {
+	return nil, errors.New("nop payload store does not support Open")
+}
+func (NopPayloadStore) Remove(context.Context, string) error { return nil }
+
 // FilePayloadStore persists payloads on the local filesystem under a base directory.
 type FilePayloadStore struct {
 	baseDir string

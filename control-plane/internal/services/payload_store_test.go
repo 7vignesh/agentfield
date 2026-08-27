@@ -90,3 +90,28 @@ func TestCopyWithContextCancels(t *testing.T) {
 	err := copyWithContext(ctx, io.Discard, pr)
 	require.ErrorIs(t, err, context.Canceled)
 }
+
+func TestNopPayloadStoreReturnsNilOnSave(t *testing.T) {
+	store := NopPayloadStore{}
+	ctx := context.Background()
+
+	rec, err := store.SaveBytes(ctx, []byte(`{"hello":"world"}`))
+	require.NoError(t, err)
+	require.Nil(t, rec)
+
+	rec, err = store.SaveFromReader(ctx, strings.NewReader("data"))
+	require.NoError(t, err)
+	require.Nil(t, rec)
+}
+
+func TestNopPayloadStoreOpenReturnsError(t *testing.T) {
+	store := NopPayloadStore{}
+	_, err := store.Open(context.Background(), "payload://abc")
+	require.Error(t, err)
+}
+
+func TestNopPayloadStoreRemoveIsNoop(t *testing.T) {
+	store := NopPayloadStore{}
+	err := store.Remove(context.Background(), "payload://abc")
+	require.NoError(t, err)
+}

@@ -429,7 +429,12 @@ func NewAgentFieldServer(cfg *config.Config) (*AgentFieldServer, error) {
 		})
 	}
 
-	payloadStore := services.NewFilePayloadStore(dirs.PayloadsDir)
+	var payloadStore services.PayloadStore
+	if cfg.Storage.Mode == "postgres" {
+		payloadStore = services.NopPayloadStore{}
+	} else {
+		payloadStore = services.NewFilePayloadStore(dirs.PayloadsDir)
+	}
 
 	// Configure SSRF-safe webhook client allowlist. Hosts/CIDRs listed here
 	// bypass the private-IP check (e.g. for internal Docker/K8s service names).

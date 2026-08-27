@@ -501,6 +501,11 @@ func TestExecuteHelpers_AdditionalCoverage(t *testing.T) {
 		require.NotNil(t, uri)
 		assert.True(t, strings.HasPrefix(*uri, "payload://"))
 
+		// NopPayloadStore returns nil record - savePayload must handle gracefully
+		controller.payloads = services.NopPayloadStore{}
+		nopURI := controller.savePayload(context.Background(), []byte(`{"data":true}`))
+		assert.Nil(t, nopURI)
+
 		controller.triggerWebhook("")
 		controller.webhooks = &mockWebhookDispatcher{
 			notifyFunc: func(ctx context.Context, executionID string) error {
