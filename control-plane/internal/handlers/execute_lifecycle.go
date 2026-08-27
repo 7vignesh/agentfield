@@ -13,6 +13,9 @@ import (
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 )
 
+// completionPollInterval is how often waitForExecutionCompletion re-reads the
+// execution record while it waits on the event bus. Var, not const, so tests
+// can shrink it.
 var completionPollInterval = 500 * time.Millisecond
 
 // waitForExecutionCompletion waits for an execution to complete by subscribing to the event bus.
@@ -457,4 +460,3 @@ type executionHeaders struct {
 	replayBeforeExecutionID string
 	replayMode              string
 }
-

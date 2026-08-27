@@ -289,7 +289,3 @@ func (c *executionController) publishExecutionStartedEvent(plan *preparedExecuti
 		&plan.target.TargetName,
 	)
 }
-
-// completionPollInterval is how often waitForExecutionCompletion re-reads the
-// execution record while it waits on the event bus. Var, not const, so tests
-// can shrink it.

@@ -429,7 +429,6 @@ func (c *executionController) handleSync(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, response)
 }
 
-
 func (c *executionController) handleAsync(ctx *gin.Context) {
 	reqCtx := ctx.Request.Context()
 	plan, err := c.prepareExecution(reqCtx, ctx)
@@ -804,4 +803,3 @@ func (c *executionController) handleStatusUpdate(ctx *gin.Context) {
 
 	ctx.JSON(http.StatusOK, c.renderStatusWithApproval(reqCtx, updated))
 }
-
