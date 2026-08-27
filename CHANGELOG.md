@@ -6,6 +6,319 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.137-rc.2] - 2026-08-27
+
+
+### Other
+
+- Add Pi and OMP harness providers (#913)
+
+* Add Pi and OMP harness providers
+
+* Make OMP the default harness provider
+
+* Improve Pi and OMP harness coverage
+
+* address review comments on #913
+
+- Go pi.go: build the plan-mode read-only tool list as a fresh slice
+  instead of the in-place tools[:0] filter, matching the Python/TS
+  providers and removing the aliasing footgun.
+- Go pi.go: distinguish a negative return code (signal kill) from a
+  plain non-zero exit, reporting 'Process killed by signal N.' to match
+  the Python provider and the gemini/opencode Go providers.
+- Add a pi_test.go case pinning the signal-kill message.
+
+* harness: keep aforge as the default; document Pi and OMP as additional providers
+
+Sweeps the OMP-as-default remnants left in non-conflicting files after the
+merge, and brings the Go Pi/OMP provider up to the Result.Model contract main
+added for aforge/opencode:
+
+- af doctor / af harness doctor list aforge-first ordering and drop the
+  "omp default" help text.
+- skills/agentfield (+ embedded skill_data mirror), harness-v2-design, the
+  harness_duo Go example and its README no longer claim OMP is the default;
+  omp_worker now passes Provider explicitly.
+- TS Agent usage attribution resolves through resolveProviderName so the
+  explicit > config > AGENTFIELD_HARNESS_PROVIDER > aforge chain is honoured.
+- sdk/go/harness/pi.go populates Metrics.Model (configured model wins over the
+  model reported in the Pi/OMP JSONL stream), matching the Python and TS
+  adapters.
+- Tests that asserted an OMP default now assert aforge; explicit pi/omp
+  coverage is retained.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* harness: resolve the provider at dispatch time so aforge stays the default
+
+Follow-up to the merge: three places still baked OMP (or an eagerly resolved
+default) into the no-configuration path, which the gates caught.
+
+- sdk/go/harness/runner.go: NewRunner no longer stamps DefaultProvider into
+  DefaultOptions. Run() applies explicit > AGENTFIELD_HARNESS_PROVIDER >
+  aforge, so an env change reaches an already-constructed runner and
+  Agent.HarnessRunner() keeps zero-value options as main expects.
+- sdk/python/agentfield/agent.py: _harness_provider_name no longer falls back
+  to "omp", so usage attribution goes through resolve_harness_provider.
+- Tests: the Go/TS supported-provider strings list pi and omp, the TS pi/omp
+  factory test asserts explicit routing instead of an OMP default, and the
+  duplicate aforge-default usage test is dropped in favour of main's.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(ts-sdk): classify pi/omp failures with failureType and returnCode
+
+The TypeScript pi/omp provider returned failures with neither failureType
+nor returnCode set, so callers could not tell a crash from an API error or
+an empty completion — the Go and Python pi providers both classify. Mirror
+their exact ladder: signal death -> crash, non-zero exit -> crash, a
+stopReason error/aborted on a clean exit -> api_error, a clean exit with no
+assistant text -> no_output, otherwise none. stderr is now ANSI-stripped and
+capped at 1000 chars like Go/Python. The catch path classifies a timeout
+distinctly from a crash.
+
+runCli resolved `code ?? 0`, so a child killed by a signal looked like a
+clean exit 0 and the "Process killed by signal N" branch was unreachable.
+It now reports the negative signal number, matching Go's os/exec and
+Python's asyncio subprocess.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(ts-sdk): honour projectDir as the working directory in every provider
+
+runner.ts bases the schema-output directory on `projectDir ?? cwd`, but only
+pi/omp and aforge read projectDir — codex, gemini, opencode and claude used
+options.cwd alone. `{ schema, projectDir, cwd, provider: 'codex' }` therefore
+wrote the instruction file into one directory and ran the CLI in another, so
+the agent was told to write a file outside the root it could see.
+
+Add a single resolveRoot() helper (projectDir -> project_dir -> cwd, the
+precedence every Python provider already uses) and route all six providers
+through it. This also fixes opencode's inverted ladder, which checked cwd
+first and then a snake_case project_dir key the TS options object never
+carries.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(cli): probe pi/omp over stdin like the SDK adapters do
+
+`af doctor --probe` ran `pi --print "Say OK"` with the prompt positional and
+stdin left at EOF, while all three SDK adapters run `<bin> --print --mode json`
+and feed the prompt over stdin. The probe therefore exercised a different
+surface than the harness does, so a healthy install could be reported as
+empty or error.
+
+The registry entry gains ProbeStdin; pi and omp now carry the adapters' exact
+flag set with the prompt on stdin, and runProbeCommand wires a strings.Reader
+in when a payload is present. Providers that take the prompt positionally keep
+a nil stdin, and the 60s probe bound is unchanged.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(harness): stop sending Pi an approval flag it rejects
+
+Verified against the real CLIs (pi 0.74.2, omp v18.0.7):
+
+- Pi has no approval flag at all. `--approve`, `--auto-approve`, `--yolo`,
+  `-y`, `--approval-mode` and `--permission-mode` each fail with
+  `Error: Unknown option: <flag>`, so the `permission_mode="auto"` branch made
+  every Pi auto-mode run die on argument parsing. Only OMP gets a flag now
+  (`--auto-approve`, which it does document).
+- `--tools` is an enforced allowlist in both CLIs and is Pi's own documented
+  read-only mechanism ("Read-only mode (no file modifications possible):
+  pi --tools read,grep,find,ls -p ..."), so plan mode is genuinely read-only
+  with no approval flag. OMP's default `tools.approvalMode` is `yolo`, and even
+  `always-ask` auto-approves read-only tiers, so a read-only allowlist never
+  blocks on approval there either.
+
+Plan mode therefore keeps sending only the read-only allowlist. The flag set is
+now pinned by a test in each SDK that rejects every known approval-style flag,
+and the ground truth is recorded in a comment at each branch so it does not get
+"fixed" back.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* test(python): clear AGENTFIELD_HARNESS_PROVIDER in the aforge-default test
+
+test_default_provider_is_aforge asserts the built-in default, but
+HarnessConfig.provider resolves through AGENTFIELD_HARNESS_PROVIDER, so
+the test failed on any machine that pins a harness provider in the
+environment. Every sibling test that asserts this default already clears
+the variable (test_harness_types.py, test_types.py, test_harness_defaults.py,
+test_harness_runner.py); this one did not.
+
+Verified: `AGENTFIELD_HARNESS_PROVIDER=codex pytest tests/test_harness_factory.py`
+now passes.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(cli): stop the --provider help implying the flag defaults to aforge
+
+`--provider` has no default: omitting it surveys every provider. In cobra
+help, "(default)" reads as the flag's own default value, so annotating
+aforge that way advertised behaviour the flag does not have. aforge is the
+SDK's default harness provider, which is a different statement and belongs
+in the SDK docs, not in this flag's help.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* test(cli): drop the "OMP default" premise from a harness doctor test name
+
+The test body never asserted a default — it checks OMP's provider name,
+auth status, official install command and usability — but its name was
+residue from the reverted "OMP is the default provider" design. aforge is
+the default; this was the last OMP-default claim left in the tree.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* docs(readme): list pi and omp in the harness provider-swap row
+
+The two other README spots that enumerate harness providers already list
+pi and omp; the "Harness (Multi-turn Coding Agents)" table still stopped
+at opencode. aforge stays the zero-setup default, stated in the row above.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(harness): stop reporting a recovered Pi/OMP turn as a failed run
+
+The Pi-family event stream can carry several assistant message_end events.
+All three adapters took the assistant text last-writer-wins but kept the
+provider error first-writer-sticky: once any message_end reported stopReason
+"error" or "aborted", nothing cleared it. A run whose model call failed on an
+intermediate turn and then recovered was surfaced as failure_type=api_error
+with a stale message, its correct final answer discarded — and since
+api_error is transient, the runner burned a retry re-running the whole
+harness invocation.
+
+Only the final message_end's stop reason decides now: every assistant
+message_end sets or clears the provider error. Nothing else about the parse
+changes, and no exit-code branch moves.
+
+Fixed identically in Go, Python and TypeScript with a regression test in
+each, covering both error-then-recovery (clean run) and recovery-then-error
+(still an api_error).
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(ts-sdk): derive the schema output root from the same ladder the providers use
+
+resolveRoot() centralised the provider-side working-directory ladder
+(projectDir -> project_dir -> cwd), but the runner kept its own two-rung
+version that never looked at project_dir. resolveOptions copies overrides
+with Object.entries, so a JS caller's project_dir key does reach the
+providers: with { project_dir: P, cwd: C } the schema instruction file was
+created under C while the provider ran in P, and the harness was told to
+write its output to a path outside the directory it was running in. Before
+this branch that split existed for aforge alone; centralising the ladder had
+widened it to six providers.
+
+The runner now calls resolveRoot on the resolved options, so the two ladders
+are identical by construction. Regression test covers the snake_case-only
+case; it fails if the line is reverted.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* test(ts-sdk): cover ClaudeCodeProvider's projectDir handling
+
+ClaudeCodeProvider goes through @anthropic-ai/claude-agent-sdk rather than
+cli.runCli, so the runner's provider matrix cannot reach it, and the existing
+claude tests only ever passed `cwd`. Reverting claude.ts to the old
+`options.cwd` line left the whole suite green.
+
+Two tests close that: projectDir wins over a nested cwd, and an empty-string
+cwd now leaves the SDK option unset (resolveRoot skips empty strings, where
+the old code forwarded ''). Both fail against the reverted hunk.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(cli): make `af doctor` survey aforge, the default harness provider
+
+The agentfield skill gates every use of app.harness() on `af doctor`
+reporting harness_usable: true AND listing the chosen provider. doctor's
+provider list never contained aforge, so on the default install — aforge
+shipped with `af`, nothing else present — an agent following the skill
+concluded the harness was unusable and refused to use the default provider.
+This branch had made that worse by adding aforge to the skill's provider
+union while leaving doctor's list alone.
+
+Detection now reuses `af harness doctor`'s spec table
+(findHarnessProviderSpec + probeHarnessBinary) wherever a binary-backed spec
+exists, so both doctors agree on what "installed" means. That matters for
+aforge specifically: it answers `version`, not `--version`, and `af aforge
+ensure` installs it into $AGENTFIELD_HOME/bin, which the current shell's PATH
+usually does not contain. claude-code has no binary in that table (it is the
+pip-package wrapper) and keeps the plain PATH check.
+
+--probe skips providers that declare no ProbeArgs, which is aforge alone:
+every other probe is one trivial completion, whereas aforge's only one-shot
+is a full coding-agent run with write access to the working directory, which
+is not something a doctor command should start. `af harness doctor` reports
+aforge's health.
+
+Live-verified with a fake aforge in $HOME/.agentfield/bin and an empty PATH:
+`af doctor --json` reports aforge available with its version, and
+recommendation.harness_usable true / harness_providers ["aforge"];
+`af doctor --probe` produces no aforge probe entry.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(cli): stop `--probe` reporting a silently broken pi/omp install as ok
+
+classifyProbe decided "empty" purely by an empty stdout. That was correct
+while pi/omp probed in plain --print text mode, but they now probe with
+`--print --mode json`, and the CLI emits a {"type":"session",...} event
+before any assistant output. stdout is therefore never blank and the probe
+always fell through to "ok" — so an install that exits 0 with a parsed stream
+and no assistant text, and one whose message reports stopReason "error", both
+came back healthy. That negates the exact capability --probe's own help text
+advertises, for the two providers this branch added.
+
+Providers whose probe output is a JSON event stream are now marked
+JSONLStream, and their probes apply the SDK adapters' own success criterion:
+an assistant message_end carrying text, with the last assistant message_end's
+stop reason not "error"/"aborted" (a turn that errored and then recovered is
+not a failure, matching the adapter fix in this branch). An exit-0 stream
+error surfaces its message as the probe detail when stderr is silent. Plain
+text providers keep the previous rule unchanged.
+
+Live-verified with fakes on PATH: an `omp` printing only
+{"type":"session","id":"s1"} and exiting 0 now reports status "empty" where
+it reported "ok" before; a `pi` printing a real assistant message_end still
+reports "ok".
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* test(cli): guard `af doctor`'s aforge detection against a silent revert
+
+The branch in buildDoctorReport that routes detection through the harness
+doctor's spec table (findHarnessProviderSpec + probeHarnessBinary) is the
+whole behavior of "fix(cli): make `af doctor` survey aforge, the default
+harness provider" — it is what makes doctor ask aforge for `version` rather
+than `--version`, and what makes it look in $AGENTFIELD_HOME/bin when the
+binary is not on PATH. Replacing that branch with main's original
+`checkTool(h.Binary, "--version")` left the entire internal/cli suite green,
+so a future refactor could revert the fix without CI noticing.
+
+TestBuildDoctorReport_AforgeDetectionUsesHarnessSpec drives buildDoctorReport
+with a shell-script aforge stub and covers both halves:
+
+  • installed only in $AGENTFIELD_HOME/bin with an empty PATH — doctor must
+    report it available, with the managed path and its version;
+  • on PATH but answering `version` only (non-zero on `--version`) — doctor
+    must still record the version.
+
+Both subtests fail under the `checkTool(h.Binary, "--version")` mutation
+(available:false / version:"" respectively), and the full
+`go test ./internal/cli/ -count=1` suite stays green.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com>
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (44d63dc)
+
 ## [0.1.137-rc.1] - 2026-08-27
 
 
