@@ -6,6 +6,36 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.137-rc.5] - 2026-08-28
+
+
+### CI
+
+- Ci(sdk/python): lock drift check, Python 3.13 leg, weekly latest-litellm canary (#999)
+
+* fix(sdk/python): refresh dependency lock
+
+* ci(sdk/python): test Python 3.13 and lock drift
+
+* ci(sdk/python): add weekly LiteLLM canary
+
+* chore(sdk/python): relock after the #993 litellm marker split
+
+Regenerates uv.lock on top of main now that PR #993 scopes the
+litellm !=1.97.0,<1.98.0 cap to python_version < '3.11'. The lock
+now carries both marker branches in requires-dist and passes
+uv lock --check, which the sdk-python workflow enforces from this PR.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* docs(sdk/python): note the litellm cap exit condition and canary
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (0b39990)
+
 ## [0.1.137-rc.4] - 2026-08-28
 
 
