@@ -6,6 +6,53 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.137-rc.12] - 2026-08-28
+
+
+### Fixed
+
+- Fix(sdk/python): drain control-plane-dispatched reasoners on shutdown within AGENTFIELD_SHUTDOWN_TIMEOUT (#1006)
+
+* test(sdk): cover graceful reasoner drain budgets
+
+* fix(sdk/python): drain dispatched reasoners on shutdown
+
+* fix(control-plane): respect agent shutdown budget
+
+* docs(sdk): document graceful shutdown budget
+
+* fix(sdk/python): align shutdown workflow cancellation status
+
+* fix(sdk/python): send one structured shutdown notice
+
+* fix(sdk/python): notify shutdown off the event loop
+
+* refactor(sdk/python): construct uvicorn server directly
+
+* fix(control-plane): send resolved agent shutdown budget
+
+* fix(python): bound shutdown task settlement
+
+* fix(python): deduplicate HTTP shutdown requests
+
+* test(python): cover bounded graceful shutdown
+
+* docs: clarify af stop shutdown wait
+
+* test(control-plane): cover af stop shutdown-budget error branches
+
+* chore(sdk/python): relock after the v0.1.137-rc.5 version bump
+
+The release bot bumps pyproject.toml without regenerating uv.lock, so
+the lock-drift check added in #999 fails on every branch until the lock
+is refreshed.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (d3e9dfc)
+
 ## [0.1.137-rc.11] - 2026-08-28
 
 
