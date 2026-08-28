@@ -6,6 +6,65 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.137-rc.9] - 2026-08-28
+
+
+### Fixed
+
+- Fix(control-plane): instance-scoped, deferred orphan reap on agent re-registration; hold dispatch while a node drains (#1004)
+
+* fix(control-plane): stamp executions with agent instance
+
+* fix(control-plane): defer instance orphan reap during drains
+
+* docs(control-plane): configure agent drain grace
+
+* test(control-plane): account for execution instance column
+
+* fix(control-plane): only hold actively draining agents
+
+* fix(control-plane): hold dispatches by offline recency, not health
+
+Every node-announced offline transition (POST /nodes/{id}/shutdown, the
+lifecycle/status route, a status PATCH) records health as inactive, and so
+does the health monitor's own demotion, so gating the hold on health kept
+the one case it exists for — a pod that just announced its shutdown — on
+the fail-fast path and held only monitor-demoted nodes.
+
+Gate on recency instead: a node whose last heartbeat is within
+AGENTFIELD_AGENT_DRAIN_GRACE is treated as draining and held for the
+restart grace; one silent for longer is dead and fails fast with 503 and no
+execution row. The same window already defers the orphan reap, so both
+sides of the drain agree on what "recently" means.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* docs(control-plane): move the .env.example block into its section
+
+Keeps this PR's example variables next to the section they belong to
+instead of appending at end-of-file, so sibling PRs that also extend
+.env.example merge in any order.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(control-plane): bound deferred orphan reap
+
+* docs(control-plane): document deferred reap backstop
+
+* fix(control-plane): read workflow instance IDs
+
+* test(control-plane): script instance_id in workflow-execution fixtures
+
+The workflow-execution SELECT now reads COALESCE(instance_id, ''), so the
+scripted driver row and the shared lifecycle column list must carry the
+column too; CI's coverage run caught the 43-vs-44 Scan mismatch.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (c477f6d)
+
 ## [0.1.137-rc.8] - 2026-08-28
 
 
