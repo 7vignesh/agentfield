@@ -122,6 +122,12 @@ func (c *executionController) prepareExecutionForTargetWithAdmission(ctx context
 	// contacting the agent, so the node being down must not reject it (a
 	// replay miss simply dials and fails exactly as it did before this gate).
 	if agent.DeploymentType != "serverless" && strings.TrimSpace(headers.replaySourceRunID) == "" {
+		if agentIsDraining(agent) {
+			agent, err = c.waitForDrainingAgent(ctx, agent, target.NodeID)
+			if err != nil {
+				return nil, err
+			}
+		}
 		if err := ensureAgentDispatchable(agent, target.NodeID); err != nil {
 			return nil, err
 		}
@@ -178,6 +184,7 @@ func (c *executionController) prepareExecutionForTargetWithAdmission(ctx context
 		RunID:             runID,
 		ParentExecutionID: headers.parentExecutionID,
 		AgentNodeID:       agent.ID,
+		InstanceID:        agent.InstanceID,
 		ReasonerID:        target.TargetName,
 		NodeID:            target.NodeID,
 		Status:            types.ExecutionStatusRunning,
