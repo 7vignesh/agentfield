@@ -6,6 +6,112 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.137-rc.6] - 2026-08-28
+
+
+### Added
+
+- Feat(sdk): allow disabling structured log stdout mirroring (#994)
+
+* feat(sdk): allow disabling structured log stdout mirroring
+
+* fix(sdk): treat AGENTFIELD_LOG_STDOUT like the SDK's other on-by-default flags
+
+AGENTFIELD_LOG_STDOUT was parsed as `== "true"`, so only the literal string
+"true" kept the stdout mirror on. Every other value turned it off, including
+values that are truthy everywhere else in the SDK (`_TRUTHY_ENV_VALUES` in
+agent.py accepts 1/true/yes), a set-but-empty variable — what a bare
+`AGENTFIELD_LOG_STDOUT=` in a Compose file or `value: ""` in a Kubernetes
+manifest produces — and any typo. An operator who set the flag to `1` to keep
+mirroring, or who left it empty, silently lost their structured log output.
+
+Use the falsy-list convention already established by node_logs.logs_enabled()
+for on-by-default flags: 0/false/no/off disable, everything else keeps the
+default. The flag now fails towards keeping records visible.
+
+Also move the docs entry out of "Control Plane (Server) > Logging" into
+"Agent Nodes > Python SDK agents" — the variable is read only by the Python
+SDK, so a server operator setting it would see no effect — and spell out the
+accepted values the way the neighbouring AGENTFIELD_DISABLE_IP_DETECTION
+entry does.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(sdk): make structured stdout mirroring opt-in
+
+* Revert "fix(sdk): make structured stdout mirroring opt-in"
+
+This reverts commit ff99fa92be41ab3955679826d954d06cb347e05d.
+
+* fix(sdk): skip disabled structured log serialization
+
+---------
+
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com>
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (515ae55)
+
+
+
+### Fixed
+
+- Fix(sdk/go,sdk/typescript): graceful shutdown drains dispatched executions under AGENTFIELD_SHUTDOWN_TIMEOUT (#1000)
+
+* test(sdk): cover graceful shutdown contracts
+
+* fix(sdk/go): drain asynchronous executions on shutdown
+
+* fix(sdk/typescript): handle signals and drain executions
+
+* test(sdk/typescript): run shutdown parser contract in suite
+
+* docs(sdk): document shared graceful shutdown timeout
+
+* fix(sdk/go): unblock Serve after remote shutdown
+
+* fix(sdk/go): bound graceful shutdown drain
+
+* test(sdk/go): cover asynchronous shutdown drain
+
+* fix(sdk/typescript): cancel all executions on shutdown timeout
+
+* fix(sdk/typescript): exit after signal shutdown
+
+* fix(sdk/typescript): reuse shutdown promise
+
+* test(sdk/typescript): cover shutdown drain lifecycle
+
+* test(sdk/go): cover shutdown drain branches
+
+* chore: drop stray worker report from repo root
+
+REPORT.md was an agent work-log artifact accidentally committed to the
+repository root; it is not project documentation and should not ship.
+
+* docs: restore blank line before Harness heading
+
+Lost while resolving the ENVIRONMENT_VARIABLES.md rebase conflict.
+
+* docs: place the SDK graceful-shutdown section under Agent Nodes
+
+Moves the Go/TypeScript AGENTFIELD_SHUTDOWN_TIMEOUT section next to the
+other agent-node settings instead of the end of the file, and leaves the
+control-plane bullet untouched, so sibling PRs editing the same document
+merge in any order. Points at the Python SDK section for its equivalent.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(ts-sdk): bound post-cancel drain wait
+
+* fix(ts-sdk): reject executions during shutdown
+
+* fix(go-sdk): make shutdown lease stop idempotent
+
+* docs: clarify graceful shutdown bound
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (9399409)
+
 ## [0.1.137-rc.5] - 2026-08-28
 
 
