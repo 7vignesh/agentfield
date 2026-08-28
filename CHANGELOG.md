@@ -6,6 +6,51 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.137-rc.8] - 2026-08-28
+
+
+### Fixed
+
+- Fix(control-plane): reject async executions before persisting them; drain the async pool on shutdown; ingress limits (#1001)
+
+* test(control-plane): cover async admission and ingress contracts
+
+* fix(control-plane): admit async work before persistence
+
+* fix(control-plane): drain async pool and harden ingress
+
+* docs(control-plane): document execution admission settings
+
+* fix(control-plane): scope execute body cap to execute routes
+
+* fix(control-plane): emit shutdown failure notifications
+
+* refactor(control-plane): remove unused shutdown wrapper
+
+* docs(control-plane): clarify async reservation lifetime
+
+* docs(control-plane): move the .env.example block into its section
+
+Keeps this PR's example variables next to the section they belong to
+instead of appending at end-of-file, so sibling PRs that also extend
+.env.example merge in any order.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(control-plane): reject streamed oversized executions
+
+* fix(control-plane): bound async shutdown draining
+
+* test(control-plane): make async saturation deterministic
+
+* fix(control-plane): persist async jobs interrupted by shutdown
+
+* fix(control-plane): admit workers plus queued async jobs
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (9a517de)
+
 ## [0.1.137-rc.7] - 2026-08-28
 
 
