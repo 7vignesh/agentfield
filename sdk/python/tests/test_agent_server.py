@@ -165,17 +165,28 @@ def test_serve_preserves_existing_lifespan_until_shutdown(monkeypatch):
     app.memory_event_client = None
     app.client = SimpleNamespace(aclose=AsyncMock())
 
-    def fake_uvicorn_run(served_app, **config):
-        async def exercise_lifespan():
-            async with served_app.router.lifespan_context(served_app):
-                events.append("serving")
+    class FakeConfig:
+        def __init__(self, served_app, **config):
+            self.app = served_app
+            self.options = config
 
-        asyncio.run(exercise_lifespan())
+    class FakeServer:
+        def __init__(self, config):
+            self.config = config
+
+        def run(self):
+            async def exercise_lifespan():
+                app = self.config.app
+                async with app.router.lifespan_context(app):
+                    events.append("serving")
+
+            asyncio.run(exercise_lifespan())
 
     monkeypatch.setattr(
         "agentfield.connection_manager.ConnectionManager", _FakeConnectionManager
     )
-    monkeypatch.setattr("agentfield.agent_server.uvicorn.run", fake_uvicorn_run)
+    monkeypatch.setattr("agentfield.agent_server.uvicorn.Config", FakeConfig)
+    monkeypatch.setattr("agentfield.agent_server.uvicorn.Server", FakeServer)
 
     AgentServer(app).serve(port=8001)
 
@@ -209,7 +220,7 @@ async def test_shutdown_graceful():
             json={"graceful": True, "timeout_seconds": 5},
             headers={"content-type": "application/json"},
         )
-    assert resp.status_code == 200
+    assert resp.status_code == 202
     data = resp.json()
     assert data["graceful"] is True
     assert data["status"] == "shutting_down"
@@ -228,7 +239,7 @@ async def test_shutdown_immediate():
     with patch.object(AgentServer, "_immediate_shutdown", fake_immediate):
         resp = await _post(app, "/shutdown", json={"graceful": False})
 
-    assert resp.status_code == 200
+    assert resp.status_code == 202
     assert resp.json()["graceful"] is False
     await asyncio.sleep(0)
     assert triggered.get("called") is True
@@ -250,7 +261,7 @@ async def test_shutdown_notification_failure():
             json={"graceful": True},
             headers={"content-type": "application/json"},
         )
-    assert resp.status_code == 200
+    assert resp.status_code == 202
 
 
 @pytest.mark.asyncio

@@ -2637,16 +2637,26 @@ class Agent(FastAPI):
         except asyncio.CancelledError as cancel_err:
             if hasattr(self, "workflow_handler") and self.workflow_handler:
                 end_time = time.time()
+                shutdown_cancel = getattr(self, "_shutdown_cancelling", False)
+                cancellation_error = (
+                    "cancelled during graceful shutdown"
+                    if shutdown_cancel
+                    else "Execution cancelled by upstream client"
+                )
 
                 self._notification_dispatcher.submit(
                     lambda: self.workflow_handler.notify_call_error(
                         execution_context.execution_id,
                         execution_context.workflow_id,
-                        "Execution cancelled by upstream client",
+                        cancellation_error,
                         int((end_time - start_time) * 1000),
                         execution_context,
                         input_data=payload_dict,
                         parent_execution_id=execution_context.parent_execution_id,
+                        status="cancelled" if shutdown_cancel else "failed",
+                        status_reason=(
+                            "shutdown timeout exceeded" if shutdown_cancel else None
+                        ),
                     )
                 )
 
@@ -2835,10 +2845,20 @@ class Agent(FastAPI):
                 # External cooperative cancel arrived (cancel dispatcher or
                 # outer task cancellation). Report cancelled status so the
                 # control plane sees a clean terminal transition.
+                shutdown_cancel = getattr(self, "_shutdown_cancelling", False)
                 payload = {
                     "status": "cancelled",
-                    "error": "cancelled_by_control_plane",
-                    "error_details": {"reason": "cancelled"},
+                    "error": (
+                        "cancelled during graceful shutdown"
+                        if shutdown_cancel
+                        else "cancelled_by_control_plane"
+                    ),
+                    "status_reason": (
+                        "shutdown timeout exceeded" if shutdown_cancel else "cancelled"
+                    ),
+                    "error_details": {
+                        "reason": "shutdown" if shutdown_cancel else "cancelled"
+                    },
                     "duration_ms": int((time.time() - start_time) * 1000),
                     "completed_at": datetime.now(timezone.utc).isoformat(),
                     "execution_id": execution_id,
@@ -2912,14 +2932,17 @@ class Agent(FastAPI):
             return
 
         safe_payload = jsonable_encoder(payload)
-        for attempt in range(max_retries):
+        shutting_down = getattr(self, "_shutdown_cancelling", False)
+        attempts = 1 if shutting_down else max_retries
+        request_timeout = 5.0 if shutting_down else 30.0
+        for attempt in range(attempts):
             try:
                 response = await self.client._async_request(
                     "POST",
                     callback_url,
                     json=safe_payload,
                     headers={"Content-Type": "application/json"},
-                    timeout=30.0,  # longer timeout for critical status callbacks
+                    timeout=request_timeout,
                 )
                 if 200 <= response.status_code < 300:
                     if self.dev_mode:
@@ -2934,9 +2957,15 @@ class Agent(FastAPI):
                 log_warn(
                     f"Async status update attempt {attempt + 1} failed for {execution_id}: {exc}"
                 )
-            if attempt < max_retries - 1:
+            if attempt < attempts - 1:
                 await asyncio.sleep(2**attempt)
-        log_error(f"Failed to deliver async status for {execution_id} after retries")
+        if shutting_down:
+            log_error(
+                f"Abandoning async status for {execution_id} during shutdown "
+                f"after {request_timeout:g}s attempt"
+            )
+        else:
+            log_error(f"Failed to deliver async status for {execution_id} after retries")
 
     def _build_execution_callback_url(self, execution_id: str) -> Optional[str]:
         if not self.agentfield_server or not execution_id:
@@ -3339,14 +3368,27 @@ class Agent(FastAPI):
                 except asyncio.CancelledError as cancel_err:
                     duration_ms = int((time.time() - start_time) * 1000)
                     if handler:
+                        shutdown_cancel = getattr(
+                            self, "_shutdown_cancelling", False
+                        )
                         await handler.notify_call_error(
                             execution_context.execution_id,
                             execution_context.workflow_id,
-                            "Execution cancelled by upstream client",
+                            (
+                                "cancelled during graceful shutdown"
+                                if shutdown_cancel
+                                else "Execution cancelled by upstream client"
+                            ),
                             duration_ms,
                             execution_context,
                             input_data=input_payload,
                             parent_execution_id=execution_context.parent_execution_id,
+                            status="cancelled" if shutdown_cancel else "failed",
+                            status_reason=(
+                                "shutdown timeout exceeded"
+                                if shutdown_cancel
+                                else None
+                            ),
                         )
                     raise cancel_err
                 except HTTPException as http_exc:
