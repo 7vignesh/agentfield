@@ -6,6 +6,53 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.137-rc.11] - 2026-08-28
+
+
+### Fixed
+
+- Fix(sdk/python): bounded, non-blocking structured log mirror; safe tee; async log follower (#1002)
+
+* test(sdks): cover safe bounded log mirroring
+
+* fix(sdk/python): bound structured stdout logging
+
+* fix(sdk/go): allow disabling execution log mirror
+
+* docs(logging): document SDK log controls
+
+* style(sdk/python): format logging changes
+
+* test(sdk/python): preserve lifecycle updates on capture failure
+
+* fix(sdk/python): shallow-copy the mirrored record instead of deepcopy
+
+The bounded stdout view only replaces attribute values, so a deepcopy of a
+multi-megabyte (or non-copyable) payload was pure cost — and a copy failure
+would have silently skipped the mirror.
+
+* fix(python): always emit bounded structured JSON
+
+* perf(python): size structured attributes in one pass
+
+* test(python): cover bounded structured log fallbacks
+
+* docs: clarify structured log line byte cap
+
+* fix(sdk/python): remove cached stdout mirror setting
+
+* chore(sdk/python): relock after the v0.1.137-rc.5 version bump
+
+The release bot bumps pyproject.toml without regenerating uv.lock, so
+the lock-drift check added in #999 fails on every branch until the lock
+is refreshed.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (adc27d7)
+
 ## [0.1.137-rc.10] - 2026-08-28
 
 
