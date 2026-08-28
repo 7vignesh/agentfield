@@ -6,6 +6,37 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.137-rc.7] - 2026-08-28
+
+
+### Fixed
+
+- Fix(control-plane): honor execution_id query filter, per-key rate-limit identity, operator note reads, real details timestamps; make OTLP export work with standard endpoints (#1005)
+
+* fix(control-plane): honor execution query filters
+
+* fix(control-plane): allow operator note reads
+
+* fix(control-plane): return persisted execution details
+
+* fix(control-plane): export traces to configured OTLP transport
+
+* docs(control-plane): document tracing configuration
+
+* fix(control-plane): use complete workflow reads for details
+
+* fix(control-plane): restore exact execution detail reads
+
+* chore(control-plane): tidy tracing dependencies
+
+* style(control-plane): format execution storage fixture
+
+* fix(control-plane): use exporter-specific OTLP defaults
+
+* docs(control-plane): clarify tracing startup failures
+
+* docs(control-plane): describe execution note operator reads (e38277a)
+
 ## [0.1.137-rc.6] - 2026-08-28
 
 
