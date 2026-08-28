@@ -77,6 +77,7 @@ import {
   type SessionDefinition,
   type SessionOptions
 } from '../session.js';
+import { parseShutdownTimeout, type ServeOptions } from './signals.js';
 
 interface WildcardParams extends ParamsDictionary {
   0: string;
@@ -84,6 +85,7 @@ interface WildcardParams extends ParamsDictionary {
 class TargetNotFoundError extends Error {}
 
 const AGENTFIELD_TS_SDK_VERSION = '0.1.82';
+const POST_CANCEL_SETTLEMENT_MS = 5000;
 
 const harnessRunners = new WeakMap<object, HarnessRunner>();
 
@@ -125,6 +127,10 @@ export class Agent {
   readonly skills = new SkillRegistry();
   private server?: http.Server;
   private heartbeatTimer?: NodeJS.Timeout;
+  private shutdownPromise?: Promise<void>;
+  private readonly inFlightExecutions = new Map<string, Promise<void>>();
+  private shuttingDown = false;
+  private signalHandlers?: { SIGTERM: () => void; SIGINT: () => void };
   private readonly aiClient: AIClient;
   private readonly agentFieldClient: AgentFieldClient;
   private readonly memoryClient: MemoryClient;
@@ -639,7 +645,7 @@ export class Agent {
     };
   }
 
-  async serve(): Promise<void> {
+  async serve(options: ServeOptions = {}): Promise<void> {
     await this.registerWithControlPlane();
 
     // Perform a blocking initial refresh for local verification before accepting requests
@@ -665,21 +671,66 @@ export class Agent {
     });
     this.memoryEventClient.start();
     this.startHeartbeat();
+    if (options.handleSignals !== false) this.installSignalHandlers();
   }
 
-  async shutdown(): Promise<void> {
-    if (this.heartbeatTimer) {
-      clearInterval(this.heartbeatTimer);
-    }
-    // Unblock any reasoner still parked in ctx.pause() so shutdown doesn't hang.
-    this.pauseManager.cancelAll();
-    await new Promise<void>((resolve, reject) => {
-      this.server?.close((err) => {
+  shutdown(): Promise<void> {
+    if (this.shutdownPromise) return this.shutdownPromise;
+    this.shuttingDown = true;
+    this.shutdownPromise = this.performShutdown();
+    return this.shutdownPromise;
+  }
+
+  private async performShutdown(): Promise<void> {
+    const listenerClosed = new Promise<void>((resolve, reject) => {
+      if (!this.server) return resolve();
+      this.server.close((err) => {
         if (err) reject(err);
         else resolve();
       });
     });
+    try { await this.agentFieldClient.shutdown(this.config.nodeId); }
+    catch (err) { console.warn('[Agent] Failed to notify control plane of shutdown:', err); }
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer);
+    }
+    await listenerClosed;
+    const timeoutMs = parseShutdownTimeout(process.env.AGENTFIELD_SHUTDOWN_TIMEOUT);
+    let timer: NodeJS.Timeout | undefined;
+    const timeout = new Promise<'timeout'>(resolve => { timer = setTimeout(() => resolve('timeout'), timeoutMs); });
+    const drained = Promise.allSettled([...this.inFlightExecutions.values()]).then(() => 'drained' as const);
+    if (await Promise.race([drained, timeout]) === 'timeout') {
+      for (const executionId of this.inFlightExecutions.keys()) {
+        this.cancelRegistry.cancel(executionId, 'shutdown_timeout');
+      }
+      this.pauseManager.cancelAll();
+      let settlementTimer: NodeJS.Timeout | undefined;
+      const settlementTimeout = new Promise<void>(resolve => {
+        settlementTimer = setTimeout(resolve, POST_CANCEL_SETTLEMENT_MS);
+      });
+      await Promise.race([
+        Promise.allSettled([...this.inFlightExecutions.values()]),
+        settlementTimeout
+      ]);
+      if (settlementTimer) clearTimeout(settlementTimer);
+    }
+    if (timer) clearTimeout(timer);
     this.memoryEventClient.stop();
+    if (this.signalHandlers) {
+      process.off('SIGTERM', this.signalHandlers.SIGTERM);
+      process.off('SIGINT', this.signalHandlers.SIGINT);
+      this.signalHandlers = undefined;
+    }
+  }
+
+  private installSignalHandlers(): void {
+    if (this.signalHandlers) return;
+    const handle = (signal: 'SIGTERM' | 'SIGINT') => () => {
+      void this.shutdown().finally(() => { process.exit(signal === 'SIGTERM' ? 143 : 130); });
+    };
+    this.signalHandlers = { SIGTERM: handle('SIGTERM'), SIGINT: handle('SIGINT') };
+    process.on('SIGTERM', this.signalHandlers.SIGTERM);
+    process.on('SIGINT', this.signalHandlers.SIGINT);
   }
 
   async call(target: string, input: any) {
@@ -1175,6 +1226,10 @@ export class Agent {
   }
 
   private async executeReasoner(req: express.Request, res: express.Response, name: string) {
+    if (this.shuttingDown) {
+      res.status(503).json({ error: 'agent shutting down' });
+      return;
+    }
     const metadata = this.buildMetadata(req);
     const reasoner = this.reasoners.get(name);
 
@@ -1188,7 +1243,9 @@ export class Agent {
     if (reasoner && this.shouldRunAsync(req)) {
       res.status(202).json({ status: 'processing', execution_id: metadata.executionId });
       // Detached — do not await; runReasonerAsync reports its own terminal status.
-      void this.runReasonerAsync(reasoner, { targetName: name, input: req.body, metadata });
+      const execution = this.runReasonerAsync(reasoner, { targetName: name, input: req.body, metadata });
+      this.inFlightExecutions.set(metadata.executionId, execution);
+      void execution.finally(() => this.inFlightExecutions.delete(metadata.executionId));
       return;
     }
 
@@ -1244,6 +1301,10 @@ export class Agent {
   }
 
   private async executeServerlessHttp(req: express.Request, res: express.Response, explicitName?: string) {
+    if (this.shuttingDown) {
+      res.status(503).json({ error: 'agent shutting down' });
+      return;
+    }
     const invocation = this.extractInvocationDetails({
       path: req.path,
       explicitTarget: explicitName,
