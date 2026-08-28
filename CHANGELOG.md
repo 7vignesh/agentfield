@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.137-rc.3] - 2026-08-28
+
+
+### Fixed
+
+- Fix(python-sdk): scope LiteLLM cap to Python 3.10 (#993)
+
+Signed-off-by: ump45nose <52391318+ump45nose@users.noreply.github.com> (e9710dc)
+
 ## [0.1.137-rc.2] - 2026-08-27
 
 
