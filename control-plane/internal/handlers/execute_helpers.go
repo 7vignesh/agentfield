@@ -816,6 +816,9 @@ func (c *executionController) savePayload(ctx context.Context, data []byte) *str
 		logger.Logger.Warn().Err(err).Int("bytes", len(data)).Msg("failed to persist payload; proceeding without URI")
 		return nil
 	}
+	if record == nil {
+		return nil
+	}
 	uri := record.URI
 	return &uri
 }
