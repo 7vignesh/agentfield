@@ -6,6 +6,55 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.137-rc.13] - 2026-08-29
+
+
+### Fixed
+
+- Fix: release polish for v0.1.137 — graceful af server, timeout=0, ingress caps, SDK drain fixes, lint, k8s manifests, docs (#1010)
+
+* fix(typescript-sdk): bound graceful shutdown drain
+
+* fix(agent): reject dispatches during shutdown notification
+
+* fix(agent): synchronize initialized test read
+
+* fix(deployments): allow graceful workload shutdown
+
+* fix(api-catalog): expose UI execution details
+
+* docs(config): correct deployment environment guidance
+
+* docs(deployments): document production lifecycle contracts
+
+* docs(api): match the documented execute rejection categories to the code
+
+* chore(sdk/python): relock uv.lock for 0.1.137rc12
+
+* fix(sdk/python): use lifespan signal shutdown path
+
+* fix(sdk/python): isolate manager log context
+
+* ci(release): relock Python SDK after version bump
+
+* fix(sdk/python): drop the dead signal-handler delegates that pointed at the removed os._exit path
+
+* fix(cli): gracefully stop server on signals
+
+* fix(execute): disable async wait timeout at zero
+
+* fix(execute): add retry hint for unavailable nodes
+
+* fix(server): cap node registration request bodies
+
+* ci(control-plane): clear lint findings
+
+* fix(payloads): sweep stale temporary files
+
+* fix(af-tray): keep the Claude usage URL constant with its darwin-only caller
+
+* test(control-plane): cover the af server drain helper and the registration body cap env handling (f55ed41)
+
 ## [0.1.137-rc.12] - 2026-08-28
 
 
