@@ -6,6 +6,42 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.137-rc.14] - 2026-08-30
+
+
+### Fixed
+
+- Fix: end SSE streams on shutdown so af server exits promptly; restore Go SDK notify-then-drain order (#1011)
+
+* fix(server): cancel streams before graceful shutdown
+
+* fix(server): treat drain timeout as successful shutdown
+
+* fix(go-sdk): accept dispatch during shutdown notify
+
+* docs(shutdown): clarify limits and grace periods
+
+* fix(config): accept bare seconds for AGENTFIELD_SHUTDOWN_TIMEOUT like the SDKs do (b01e831)
+
+
+
+### Testing
+
+- Test(storage): add composite-PK migration + autoMigrateSchema tests (#392) (#1012)
+
+Adds control-plane/internal/storage/migrations_test.go covering
+migrateAgentNodesCompositePK and autoMigrateSchema for local (SQLite)
+mode. Test-only; no source changes.
+
+Six subtests seed the legacy agent_nodes schema via raw SQL and inspect
+pragma_table_info afterward:
+- fresh install skips legacy migration (no table -> no-op)
+- already-migrated schema is a no-op and preserves data
+- legacy table recreated with composite PK (id, version) + traffic_weight
+- missing feature columns backfilled before copy
+- group_id backfill uses id during copy
+- autoMigrateSchema runs the composite-PK migration before GORM models (09d112c)
+
 ## [0.1.137-rc.13] - 2026-08-29
 
 
