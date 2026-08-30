@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -178,6 +180,97 @@ func TestCircuitBreakerHalfOpenAfterTimeout(t *testing.T) {
 	assert.Equal(t, CircuitClosed, rl.State())
 }
 
+func TestCircuitBreakerHalfOpenAdmitsSingleProbe(t *testing.T) {
+	current := time.Unix(1000, 0)
+	rl, _ := newTestRateLimiter(RateLimiterConfig{
+		MaxRetries:              0,
+		CircuitBreakerThreshold: 1,
+		CircuitBreakerTimeout:   30 * time.Second,
+	}, func() time.Time { return current })
+
+	// Open the circuit.
+	require.Error(t, rl.Execute(context.Background(), func() error {
+		return &APIError{StatusCode: 429}
+	}))
+
+	// Advance past the timeout: half-open, one probe should be admitted.
+	current = current.Add(31 * time.Second)
+	require.Equal(t, CircuitHalfOpen, rl.State())
+
+	// Hold the probe in flight and, from within it, confirm every concurrent
+	// caller is fast-failed with ErrCircuitOpen (only one probe is admitted).
+	probeAdmitted := false
+	err := rl.Execute(context.Background(), func() error {
+		probeAdmitted = true
+		for i := 0; i < 5; i++ {
+			inner := rl.Execute(context.Background(), func() error {
+				t.Fatal("a second request was admitted while the probe was in flight")
+				return nil
+			})
+			require.ErrorIs(t, inner, ErrCircuitOpen)
+		}
+		return &APIError{StatusCode: 429} // probe fails
+	})
+	require.Error(t, err)
+	require.True(t, probeAdmitted)
+
+	// A failed probe re-opens the circuit (timer restarted from now).
+	assert.Equal(t, CircuitOpen, rl.State())
+}
+
+func TestCircuitBreakerFailedProbeReopens(t *testing.T) {
+	current := time.Unix(1000, 0)
+	rl, _ := newTestRateLimiter(RateLimiterConfig{
+		MaxRetries:              0,
+		CircuitBreakerThreshold: 1,
+		CircuitBreakerTimeout:   30 * time.Second,
+	}, func() time.Time { return current })
+
+	require.Error(t, rl.Execute(context.Background(), func() error {
+		return &APIError{StatusCode: 429}
+	}))
+
+	current = current.Add(31 * time.Second)
+	// Failed probe.
+	require.Error(t, rl.Execute(context.Background(), func() error {
+		return &APIError{StatusCode: 429}
+	}))
+	// Circuit is open again and the next immediate caller is rejected.
+	assert.Equal(t, CircuitOpen, rl.State())
+	err := rl.Execute(context.Background(), func() error {
+		t.Fatal("caller admitted while circuit re-opened")
+		return nil
+	})
+	require.ErrorIs(t, err, ErrCircuitOpen)
+}
+
+func TestCircuitBreakerProbeReleasedOnNonRateLimitError(t *testing.T) {
+	current := time.Unix(1000, 0)
+	rl, _ := newTestRateLimiter(RateLimiterConfig{
+		MaxRetries:              0,
+		CircuitBreakerThreshold: 1,
+		CircuitBreakerTimeout:   30 * time.Second,
+	}, func() time.Time { return current })
+
+	require.Error(t, rl.Execute(context.Background(), func() error {
+		return &APIError{StatusCode: 429}
+	}))
+
+	current = current.Add(31 * time.Second)
+	// The probe hits a non-rate-limit error: it must not consume the probe slot,
+	// so a following caller can still take the half-open probe.
+	require.ErrorContains(t, rl.Execute(context.Background(), func() error {
+		return errors.New("unrelated failure")
+	}), "unrelated failure")
+
+	// Still half-open, probe slot free: a fresh probe is admitted and succeeds.
+	require.Equal(t, CircuitHalfOpen, rl.State())
+	require.NoError(t, rl.Execute(context.Background(), func() error {
+		return nil
+	}))
+	assert.Equal(t, CircuitClosed, rl.State())
+}
+
 func TestCircuitBreakerDisabled(t *testing.T) {
 	rl, _ := newTestRateLimiter(RateLimiterConfig{
 		MaxRetries:              0,
@@ -332,4 +425,60 @@ func TestSleepWithContext(t *testing.T) {
 
 func TestContainerSeedStable(t *testing.T) {
 	assert.Equal(t, containerSeed(), containerSeed())
+}
+
+// TestCircuitBreakerHalfOpenConcurrentProbe verifies that, under real goroutine
+// contention, exactly one caller is admitted as the half-open probe once the
+// open timeout has elapsed. All others must fast-fail with ErrCircuitOpen.
+func TestCircuitBreakerHalfOpenConcurrentProbe(t *testing.T) {
+	current := time.Unix(1000, 0)
+	rl, _ := newTestRateLimiter(RateLimiterConfig{
+		MaxRetries:              0,
+		CircuitBreakerThreshold: 1,
+		CircuitBreakerTimeout:   30 * time.Second,
+	}, func() time.Time { return current })
+
+	// Open the circuit.
+	require.Error(t, rl.Execute(context.Background(), func() error {
+		return &APIError{StatusCode: 429}
+	}))
+
+	// Advance past the timeout so the breaker is half-open.
+	current = current.Add(31 * time.Second)
+
+	const callers = 50
+	var admitted int32
+	var rejected int32
+	release := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(callers)
+
+	for i := 0; i < callers; i++ {
+		go func() {
+			defer wg.Done()
+			err := rl.Execute(context.Background(), func() error {
+				// The admitted probe blocks here so all other goroutines reach
+				// admit() while the probe slot is held.
+				atomic.AddInt32(&admitted, 1)
+				<-release
+				return nil
+			})
+			if err != nil {
+				require.ErrorIs(t, err, ErrCircuitOpen)
+				atomic.AddInt32(&rejected, 1)
+			}
+		}()
+	}
+
+	// Give every goroutine time to pass (or be rejected by) admit(), then let
+	// the single probe complete.
+	require.Eventually(t, func() bool {
+		return atomic.LoadInt32(&admitted)+atomic.LoadInt32(&rejected) == callers
+	}, 2*time.Second, time.Millisecond)
+	close(release)
+	wg.Wait()
+
+	assert.Equal(t, int32(1), atomic.LoadInt32(&admitted), "exactly one probe should be admitted")
+	assert.Equal(t, int32(callers-1), atomic.LoadInt32(&rejected), "all other callers should fast-fail")
+	assert.Equal(t, CircuitClosed, rl.State(), "successful probe closes the circuit")
 }

@@ -95,7 +95,14 @@ type RateLimiter struct {
 
 	mu                  sync.Mutex
 	consecutiveFailures int
-	circuitOpenTime     *time.Time
+	// openedAt is the time the circuit last opened. Zero when the circuit has
+	// never opened or has since closed.
+	openedAt time.Time
+	// probing is true while a single half-open probe request is in flight.
+	// It gates concurrent callers to exactly one probe after the open timeout.
+	probing bool
+	// open is true while the circuit is open or half-open (i.e. not closed).
+	open bool
 
 	// now and sleep are overridable for testing.
 	now   func() time.Time
@@ -152,7 +159,10 @@ func (r *RateLimiter) Execute(ctx context.Context, fn func() error) error {
 		return fn()
 	}
 
-	if r.circuitBreakerThreshold > 0 && r.checkCircuitOpen() {
+	// Consult the circuit breaker. admit reports whether this call may proceed
+	// and whether it was admitted as the single half-open probe.
+	admitted, isProbe := r.admit()
+	if !admitted {
 		return fmt.Errorf("%w: too many consecutive rate-limit failures; retry after %s",
 			ErrCircuitOpen, r.circuitBreakerTimeout)
 	}
@@ -161,24 +171,30 @@ func (r *RateLimiter) Execute(ctx context.Context, fn func() error) error {
 	for attempt := 0; attempt <= r.maxRetries; attempt++ {
 		err := fn()
 		if err == nil {
-			r.recordSuccess()
+			r.onResult(isProbe, true)
 			return nil
 		}
 
 		lastErr = err
 
 		if !isRateLimitError(err) {
+			// A non-rate-limit error does not reflect on provider health, so it
+			// neither trips the breaker nor consumes the probe. Release the probe
+			// slot so a subsequent caller can retry the half-open transition.
+			r.releaseProbe(isProbe)
 			return err
 		}
 
-		r.recordFailure()
-
 		if attempt >= r.maxRetries {
+			r.onResult(isProbe, false)
 			break
 		}
 
 		delay := r.backoffDelay(attempt, retryAfterFromError(err))
 		if sleepErr := r.sleep(ctx, delay); sleepErr != nil {
+			// The caller went away before we could finish retrying. Release the
+			// probe slot without a verdict so the breaker is not stuck half-open.
+			r.releaseProbe(isProbe)
 			return sleepErr
 		}
 	}
@@ -186,60 +202,102 @@ func (r *RateLimiter) Execute(ctx context.Context, fn func() error) error {
 	return fmt.Errorf("%w after %d attempts: %w", ErrMaxRetriesExceeded, r.maxRetries, lastErr)
 }
 
-// State returns the current circuit breaker state.
+// State returns the current circuit breaker state. It is advisory only:
+// concurrent callers may change the state immediately after this returns.
 func (r *RateLimiter) State() CircuitState {
 	if r == nil || r.circuitBreakerThreshold <= 0 {
 		return CircuitClosed
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.circuitOpenTime == nil {
+	return r.stateLocked()
+}
+
+// stateLocked computes the circuit state; the caller must hold r.mu.
+func (r *RateLimiter) stateLocked() CircuitState {
+	if !r.open {
 		return CircuitClosed
 	}
-	if r.now().Sub(*r.circuitOpenTime) > r.circuitBreakerTimeout {
+	if r.now().Sub(r.openedAt) > r.circuitBreakerTimeout {
 		return CircuitHalfOpen
 	}
 	return CircuitOpen
 }
 
-// checkCircuitOpen reports whether the circuit is open. If the open timeout has
-// elapsed it closes the circuit (half-open probe) and returns false.
-func (r *RateLimiter) checkCircuitOpen() bool {
+// admit decides whether a call may proceed and whether it is the single
+// half-open probe. When the breaker is disabled it always admits (not a probe).
+//
+// Semantics:
+//   - closed: admit, not a probe.
+//   - open (within timeout): reject.
+//   - half-open (timeout elapsed): admit exactly one probe; concurrent callers
+//     are rejected until that probe reports back via onResult/releaseProbe.
+func (r *RateLimiter) admit() (admitted bool, isProbe bool) {
+	if r.circuitBreakerThreshold <= 0 {
+		return true, false
+	}
+
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if r.circuitOpenTime == nil {
-		return false
+	switch r.stateLocked() {
+	case CircuitClosed:
+		return true, false
+	case CircuitHalfOpen:
+		if r.probing {
+			// A probe is already in flight; fast-fail everyone else.
+			return false, false
+		}
+		r.probing = true
+		return true, true
+	default: // CircuitOpen
+		return false, false
 	}
-	if r.now().Sub(*r.circuitOpenTime) > r.circuitBreakerTimeout {
-		r.circuitOpenTime = nil
+}
+
+// onResult records the verdict of an admitted call and advances the breaker.
+// success closes the circuit; a rate-limit failure (re)opens it. isProbe marks
+// whether this call held the half-open probe slot, which is always released.
+func (r *RateLimiter) onResult(isProbe, success bool) {
+	if r.circuitBreakerThreshold <= 0 {
+		return
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if isProbe {
+		r.probing = false
+	}
+
+	if success {
+		// Recovery: close the circuit and reset the failure count.
 		r.consecutiveFailures = 0
-		return false
-	}
-	return true
-}
-
-func (r *RateLimiter) recordSuccess() {
-	if r.circuitBreakerThreshold <= 0 {
+		r.open = false
+		r.openedAt = time.Time{}
 		return
 	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.consecutiveFailures = 0
-	r.circuitOpenTime = nil
-}
 
-func (r *RateLimiter) recordFailure() {
-	if r.circuitBreakerThreshold <= 0 {
-		return
-	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	// Failure. A failed probe re-opens the circuit immediately (restart the
+	// timeout); otherwise trip the breaker once the threshold is reached.
 	r.consecutiveFailures++
-	if r.consecutiveFailures >= r.circuitBreakerThreshold && r.circuitOpenTime == nil {
-		t := r.now()
-		r.circuitOpenTime = &t
+	if isProbe || r.consecutiveFailures >= r.circuitBreakerThreshold {
+		r.open = true
+		r.openedAt = r.now()
 	}
+}
+
+// releaseProbe clears the half-open probe slot without recording a verdict,
+// used when an admitted probe neither succeeded nor produced a rate-limit
+// failure (non-rate-limit error or context cancellation). This keeps the
+// breaker from being wedged half-open with no probe in flight.
+func (r *RateLimiter) releaseProbe(isProbe bool) {
+	if r.circuitBreakerThreshold <= 0 || !isProbe {
+		return
+	}
+	r.mu.Lock()
+	r.probing = false
+	r.mu.Unlock()
 }
 
 // backoffDelay computes the delay for a given 0-based attempt, honoring a
