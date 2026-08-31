@@ -6,6 +6,50 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.138-rc.2] - 2026-08-31
+
+
+### Added
+
+- Feat(sdk/go): add AI rate limiter with backoff and circuit breaker (#1009)
+
+* feat(sdk/go): add AI rate limiter with backoff and circuit breaker (#97)
+
+Adds production resilience to the Go SDK AI client, matching the Python
+and TypeScript SDKs.
+
+- RateLimiter: exponential backoff with per-container jitter, retrying
+  on HTTP 429/503 and rate-limit keyword errors, honoring server
+  Retry-After hints and context cancellation.
+- Circuit breaker: opens after N consecutive rate-limit failures, probes
+  recovery after a timeout (half-open), closes on success. Disable with a
+  negative threshold.
+- CircuitState enum (closed/open/half-open) and sentinel errors
+  ErrCircuitOpen / ErrMaxRetriesExceeded.
+- Opt-in via ai.Config (RateLimitMaxRetries greater than 0). agent.AI
+  uses it automatically since it flows through Client.Complete.
+- Docs and tests. ai package coverage 92 to 94.7 percent.
+
+* fix(sdk/go): enforce single half-open probe in circuit breaker (#97)
+
+Addresses review feedback on PR #1009. The previous half-open handling
+cleared circuitOpenTime on the first caller after the timeout, so every
+concurrent caller also passed through - reopening the floodgate instead
+of admitting one probe.
+
+Replace the implicit time-based reset with an explicit state machine:
+- admit() returns whether a call may proceed and whether it is the single
+  half-open probe. While a probe is in flight, concurrent callers fast-fail
+  with ErrCircuitOpen.
+- onResult() closes the circuit on a successful probe or re-opens it (with
+  a fresh timeout) on a failed probe.
+- releaseProbe() frees the probe slot without a verdict when the call ends
+  in a non-rate-limit error or context cancellation, so the breaker never
+  wedges half-open.
+
+Adds tests for single-probe admission (including a 50-goroutine race test),
+failed-probe reopen, and probe release on non-rate-limit errors. (5097a58)
+
 ## [0.1.138-rc.1] - 2026-08-31
 
 
