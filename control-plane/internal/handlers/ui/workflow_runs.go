@@ -60,9 +60,10 @@ type WorkflowRunSummary struct {
 	// this run, when one exists. Populated by walking the root execution's
 	// VC chain back to the parent trigger_event VC. Nil for runs invoked
 	// directly or by another reasoner.
-	Trigger *types.TriggerEventMetadata `json:"trigger,omitempty"`
-	Lineage *RunLineageMetadata         `json:"lineage,omitempty"`
-	Golden  *GoldenRunMetadata          `json:"golden,omitempty"`
+	Trigger     *types.TriggerEventMetadata `json:"trigger,omitempty"`
+	Lineage     *RunLineageMetadata         `json:"lineage,omitempty"`
+	Golden      *GoldenRunMetadata          `json:"golden,omitempty"`
+	RunMetadata *types.RunMetadata          `json:"run_metadata,omitempty"`
 }
 
 type RunLineageMetadata struct {
@@ -89,9 +90,9 @@ type GoldenRunMetadata struct {
 // They are package-level constants rather than inline literals so the
 // run-metadata endpoint can reuse the same bounds.
 const (
-	maxGoldenTags      = 20
-	maxGoldenTagRunes  = 64
-	maxGoldenNameRunes = 200
+	maxGoldenTags      = types.MaxRunLabels
+	maxGoldenTagRunes  = types.MaxRunLabelRunes
+	maxGoldenNameRunes = types.MaxRunDisplayNameRunes
 )
 
 type WorkflowRunListResponse struct {
@@ -118,6 +119,7 @@ type WorkflowRunDetailResponse struct {
 		CompletedAt     *string             `json:"completed_at,omitempty"`
 		Lineage         *RunLineageMetadata `json:"lineage,omitempty"`
 		Golden          *GoldenRunMetadata  `json:"golden,omitempty"`
+		RunMetadata     *types.RunMetadata  `json:"run_metadata,omitempty"`
 	} `json:"run"`
 	Executions []apiWorkflowExecution `json:"executions"`
 }
@@ -127,8 +129,7 @@ type workflowRunMetadataReader interface {
 }
 
 type workflowRunMetadataWriter interface {
-	StoreWorkflowRun(ctx context.Context, run *types.WorkflowRun) error
-	GetWorkflowRun(ctx context.Context, runID string) (*types.WorkflowRun, error)
+	UpdateWorkflowRunMetadata(context.Context, string, func(map[string]json.RawMessage) error) error
 }
 
 type saveGoldenRunRequest struct {
@@ -274,47 +275,26 @@ func (h *WorkflowRunHandler) SaveGoldenRunHandler(c *gin.Context) {
 		return
 	}
 
-	now := time.Now().UTC()
 	name := truncateRunes(strings.TrimSpace(req.Name), maxGoldenNameRunes)
 	if name == "" {
 		// Do not truncate the run ID fallback; only the caller-supplied name is bounded.
 		name = runID
 	}
-	metadata := map[string]interface{}{}
-	if existing, err := store.GetWorkflowRun(ctx, runID); err == nil && existing != nil {
-		metadata = decodeWorkflowRunMetadata(existing.Metadata)
-	}
-	metadata["golden"] = GoldenRunMetadata{
+	now := time.Now().UTC()
+	golden, err := json.Marshal(GoldenRunMetadata{
 		Name:    name,
 		Tags:    sanitizeStringList(req.Tags, maxGoldenTags, maxGoldenTagRunes),
 		SavedBy: "user",
 		SavedAt: now.Format(time.RFC3339),
-	}
-	encoded, err := json.Marshal(metadata)
+	})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to encode golden metadata"})
 		return
 	}
-
-	rootExecutionID := executions[0].ExecutionID
-	for _, exec := range executions {
-		if exec.ParentExecutionID == nil || *exec.ParentExecutionID == "" {
-			rootExecutionID = exec.ExecutionID
-			break
-		}
-	}
-	run := &types.WorkflowRun{
-		RunID:           runID,
-		RootWorkflowID:  runID,
-		RootExecutionID: &rootExecutionID,
-		Status:          string(types.ExecutionStatusSucceeded),
-		TotalSteps:      len(executions),
-		CompletedSteps:  len(executions),
-		Metadata:        json.RawMessage(encoded),
-		CreatedAt:       executions[0].StartedAt,
-		UpdatedAt:       now,
-	}
-	if err := store.StoreWorkflowRun(ctx, run); err != nil {
+	if err := store.UpdateWorkflowRunMetadata(ctx, runID, func(namespaces map[string]json.RawMessage) error {
+		namespaces["golden"] = golden
+		return nil
+	}); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save golden run"})
 		return
 	}
@@ -475,6 +455,7 @@ func (h *WorkflowRunHandler) GetWorkflowRunDetailHandler(c *gin.Context) {
 	if metadata := h.loadRunMetadata(ctx, runID); metadata != nil {
 		detail.Run.Lineage = metadata.Lineage
 		detail.Run.Golden = metadata.Golden
+		detail.Run.RunMetadata = metadata.Run
 	}
 
 	if agg := h.loadRunSummary(ctx, runID); agg != nil {
@@ -598,6 +579,7 @@ func summarizeRun(runID string, executions []*types.Execution) WorkflowRunSummar
 type parsedRunMetadata struct {
 	Lineage *RunLineageMetadata
 	Golden  *GoldenRunMetadata
+	Run     *types.RunMetadata
 }
 
 func (h *WorkflowRunHandler) enrichRunMetadata(ctx context.Context, summary *WorkflowRunSummary) {
@@ -610,6 +592,7 @@ func (h *WorkflowRunHandler) enrichRunMetadata(ctx context.Context, summary *Wor
 	}
 	summary.Lineage = metadata.Lineage
 	summary.Golden = metadata.Golden
+	summary.RunMetadata = metadata.Run
 }
 
 func (h *WorkflowRunHandler) loadRunMetadata(ctx context.Context, runID string) *parsedRunMetadata {
@@ -626,7 +609,7 @@ func (h *WorkflowRunHandler) loadRunMetadata(ctx context.Context, runID string) 
 		return nil
 	}
 
-	parsed := &parsedRunMetadata{}
+	parsed := &parsedRunMetadata{Run: types.ParseRunMetadata(run.Metadata)}
 	if raw, ok := metadata["lineage"]; ok {
 		if encoded, err := json.Marshal(raw); err == nil {
 			var lineage RunLineageMetadata
@@ -643,7 +626,7 @@ func (h *WorkflowRunHandler) loadRunMetadata(ctx context.Context, runID string) 
 			}
 		}
 	}
-	if parsed.Lineage == nil && parsed.Golden == nil {
+	if parsed.Lineage == nil && parsed.Golden == nil && parsed.Run == nil {
 		return nil
 	}
 	return parsed
@@ -719,6 +702,8 @@ func truncateRunes(value string, maxRunes int) string {
 }
 
 func deriveOverallStatusForUI(executions []*types.Execution) string {
+	// Run display metadata never participates in derived execution status. The
+	// deferred external_status field must not feed this calculation either.
 	counts := make(map[string]int)
 	active := 0
 	for _, exec := range executions {
