@@ -6,6 +6,53 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.138-rc.1] - 2026-08-31
+
+
+### Testing
+
+- Test(handlers): cover discovery.go filter parsing helpers (#397) (#1015)
+
+Adds control-plane/internal/handlers/discovery_filters_test.go. Test-only;
+no source changes.
+
+Covers the query-parsing and response-building helpers:
+- parseDiscoveryFilters: invalid bool/int/format/health_status params return
+  parameterError naming the offending parameter and allowed values; happy path
+  parses all filters; defaults applied when absent.
+- collectAgentIDs: merges agent / node_id / agent_ids / node_ids aliases,
+  trimmed + deduped + sorted; agent wins over node_id; empty when none.
+- buildDiscoveryResponse: paginates after filtering (totals reflect the full
+  filtered set, page trimmed to limit); filters by agent id + tag pattern.
+- decodeSchema: nil and malformed JSON decode to nil, not an error.
+- extractDescription / extractExamples: blank descriptions ignored; typed and
+  []interface{} example shapes handled; malformed containers skipped.
+- matchesPattern / matchesTags / parseCSV / parseBool / parseInt / dedupeStrings.
+
+Coverage on the targeted functions:
+  parseDiscoveryFilters 85.7 -> 100, collectAgentIDs 81.8 -> 100,
+  decodeSchema/extractDescription/matchesTags/parseCSV/parseBool/parseInt 100,
+  buildDiscoveryResponse 96.2, extractExamples 94.1. (a9ec91d)
+
+- Test(events): cover node/exec/reasoner publish + dedupe helpers (#394) (#1014)
+
+Adds three test files under control-plane/internal/events. Test-only;
+no source changes.
+
+- node_events_dedupe_test.go: shouldFilterEvent, isDuplicateStatusEvent,
+  compareStatusEventData, cleanupEventCache, PublishNodeStatusUpdatedEnhanced
+  state extraction, StartNodeHeartbeat, plus a concurrency race test.
+- reasoner_events_publish_test.go: StartHeartbeat, online/offline/updated
+  status contracts, PublishReasonersRefresh empty-id.
+- execution_events_publish_test.go: canonical Status assertions for all
+  execution publishers (completed -> succeeded, updated preserves caller
+  status, approval resolved forwards new status, etc.) + data forwarding.
+
+Closes the coverage gaps left after prior events tests:
+  cleanupEventCache 0 -> 100, StartHeartbeat 0 -> 100,
+  StartNodeHeartbeat 0 -> 100, PublishNodeStatusUpdatedEnhanced 57 -> 100.
+  Package total 87.0 -> 97.2 percent. (4dc4d17)
+
 ## [0.1.137] - 2026-08-31
 
 ## [0.1.137-rc.14] - 2026-08-30
