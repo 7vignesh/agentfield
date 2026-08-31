@@ -151,22 +151,35 @@ func (c *executionController) handleRestart(ctx *gin.Context) {
 	}
 
 	target := fmt.Sprintf("%s.%s", restartExec.NodeID, restartExec.ReasonerID)
+	pool := getAsyncWorkerPool()
+	if reserved, stopped := pool.reserveForAdmission(); !reserved {
+		if stopped {
+			writeExecutionError(ctx, newControlPlaneShutdownError("async execution queue stopped; retry later"))
+			return
+		}
+		writeAsyncAdmissionError(ctx, http.StatusServiceUnavailable, "async execution queue is full; retry later")
+		return
+	}
+	reserved := true
+	defer func() {
+		if reserved {
+			pool.releaseReservation()
+		}
+	}()
+
 	// Restarts mint a new run identity and deliberately leave RunMetadata nil.
-	plan, err := c.prepareExecutionForTarget(reqCtx, target, ExecuteRequest{
+	plan, err := c.prepareExecutionForTargetWithAdmission(reqCtx, target, ExecuteRequest{
 		Input:   input,
 		Context: contextPayload,
 		Webhook: req.Webhook,
-	}, headers, "", "")
+	}, headers, "", "", true)
 	if err != nil {
 		writeExecutionError(ctx, err)
 		return
 	}
-
-	if err := CheckExecutionPreconditions(plan.target.NodeID, plan.llmEndpoint); err != nil {
-		_ = c.failExecution(reqCtx, plan, err, 0, nil)
-		writeExecutionError(ctx, err)
-		return
-	}
+	// Keep ownership in the handler until the job copy is ready. Gin recovery
+	// can then release the slot if metadata/event publication panics.
+	defer plan.releaseSlot()
 
 	kind := "restart"
 	if req.Fork || req.Input != nil || req.Context != nil {
@@ -176,20 +189,25 @@ func (c *executionController) handleRestart(ctx *gin.Context) {
 
 	c.publishExecutionStartedEvent(plan)
 
-	pool := getAsyncWorkerPool()
 	job := asyncExecutionJob{
 		controller: c,
 		plan:       *plan,
 	}
-	if ok := pool.submit(job); !ok {
-		ReleaseExecutionSlot(plan.target.NodeID)
-		queueErr := errors.New("async execution queue is full; retry later")
-		if updateErr := c.failExecution(reqCtx, plan, queueErr, 0, nil); updateErr != nil {
-			logger.Logger.Error().Err(updateErr).Str("execution_id", plan.exec.ExecutionID).Msg("restart: failed to persist queue saturation")
+	plan.slotHeld = false // ownership transferred to job
+	submitted := false
+	defer func() {
+		if !submitted {
+			job.plan.releaseSlot()
 		}
-		ctx.JSON(http.StatusServiceUnavailable, gin.H{"error": queueErr.Error(), "error_category": "concurrency_limit"})
+	}()
+	if ok := pool.submitReserved(job); !ok {
+		shutdownErr := newControlPlaneShutdownError("async execution queue stopped; retry later")
+		job.terminateForControlPlaneShutdown(shutdownErr)
+		writeExecutionError(ctx, shutdownErr)
 		return
 	}
+	submitted = true
+	reserved = false
 
 	createdAt := plan.exec.CreatedAt.UTC().Format(time.RFC3339)
 	var replayBefore *string

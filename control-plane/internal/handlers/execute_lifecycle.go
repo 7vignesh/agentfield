@@ -197,6 +197,7 @@ type preparedExecution struct {
 	targetType        string
 	executionMode     string
 	llmEndpoint       string
+	slotHeld          bool
 	webhookRegistered bool
 	webhookError      *string
 	// DID context forwarded to the target agent.
@@ -208,6 +209,19 @@ type preparedExecution struct {
 	replayBeforeExecutionID string
 	replayMode              string
 	replayHit               *replayHit
+}
+
+// releaseSlot releases this plan's admission slot at most once. A plan owns
+// its slot from successful preparation until a synchronous handler returns or
+// ownership is transferred to an asyncExecutionJob.
+func (p *preparedExecution) releaseSlot() {
+	if p == nil || !p.slotHeld {
+		return
+	}
+	p.slotHeld = false
+	if p.target != nil {
+		ReleaseExecutionSlot(p.target.NodeID)
+	}
 }
 
 func (c *executionController) callAgent(ctx context.Context, plan *preparedExecution) ([]byte, time.Duration, bool, error) {

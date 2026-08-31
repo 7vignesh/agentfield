@@ -17,7 +17,7 @@ import (
 )
 
 func (c *executionController) prepareExecution(ctx context.Context, ginCtx *gin.Context) (*preparedExecution, error) {
-	return c.prepareExecutionWithAdmission(ctx, ginCtx, false)
+	return c.prepareExecutionWithAdmission(ctx, ginCtx, true)
 }
 
 func (c *executionController) prepareAsyncExecution(ctx context.Context, ginCtx *gin.Context) (*preparedExecution, error) {
@@ -41,11 +41,7 @@ func (c *executionController) prepareExecutionWithAdmission(ctx context.Context,
 	)
 }
 
-func (c *executionController) prepareExecutionForTarget(ctx context.Context, targetParam string, req ExecuteRequest, headers executionHeaders, callerDID, targetDID string) (*preparedExecution, error) {
-	return c.prepareExecutionForTargetWithAdmission(ctx, targetParam, req, headers, callerDID, targetDID, false)
-}
-
-func (c *executionController) prepareExecutionForTargetWithAdmission(ctx context.Context, targetParam string, req ExecuteRequest, headers executionHeaders, callerDID, targetDID string, acquireSlot bool) (_ *preparedExecution, retErr error) {
+func (c *executionController) prepareExecutionForTargetWithAdmission(ctx context.Context, targetParam string, req ExecuteRequest, headers executionHeaders, callerDID, targetDID string, acquireSlot bool) (*preparedExecution, error) {
 	target, err := parseTarget(targetParam)
 	if err != nil {
 		return nil, fmt.Errorf("invalid target: %w", err)
@@ -153,18 +149,14 @@ func (c *executionController) prepareExecutionForTargetWithAdmission(ctx context
 	}
 	target.TargetType = targetType
 
-	llmEndpoint := extractRequestedLLMEndpoint(req)
-	slotAcquired := false
-	if acquireSlot {
-		if err := CheckExecutionPreconditions(target.NodeID, llmEndpoint); err != nil {
-			return nil, err
-		}
-		slotAcquired = true
-		defer func() {
-			if retErr != nil && slotAcquired {
-				ReleaseExecutionSlot(target.NodeID)
-			}
-		}()
+	storedPayload, err := json.Marshal(buildClientPayload(req))
+	if err != nil {
+		return nil, fmt.Errorf("encode execution payload: %w", err)
+	}
+
+	hit, err := c.findReplayHit(ctx, headers, target, storedPayload)
+	if err != nil {
+		return nil, err
 	}
 
 	runID := headers.runID
@@ -172,13 +164,30 @@ func (c *executionController) prepareExecutionForTargetWithAdmission(ctx context
 		runID = utils.GenerateRunID()
 	}
 
+	llmEndpoint := extractRequestedLLMEndpoint(req)
+	slotAcquired := false
+	slotTransferred := false
+	if acquireSlot && hit == nil {
+		if err := CheckExecutionPreconditions(target.NodeID, llmEndpoint); err != nil {
+			logger.Logger.Warn().
+				Str("node_id", target.NodeID).
+				Str("error_category", string(classifyExecutionError(err))).
+				Str("run_id", runID).
+				Msg("execution rejected by admission gate")
+			return nil, err
+		}
+		slotAcquired = true
+		defer func() {
+			// Gin recovers handler panics. Do not strand a slot when persistence or
+			// another preparation dependency panics before a plan takes ownership.
+			if slotAcquired && !slotTransferred {
+				ReleaseExecutionSlot(target.NodeID)
+			}
+		}()
+	}
+
 	executionID := utils.GenerateExecutionID()
 	now := time.Now().UTC()
-
-	storedPayload, err := json.Marshal(buildClientPayload(req))
-	if err != nil {
-		return nil, fmt.Errorf("encode execution payload: %w", err)
-	}
 
 	exec := &types.Execution{
 		ExecutionID:       executionID,
@@ -256,18 +265,14 @@ func (c *executionController) prepareExecutionForTargetWithAdmission(ctx context
 
 	c.ensureWorkflowExecutionRecord(ctx, exec, target, storedPayload)
 
-	hit, err := c.findReplayHit(ctx, headers, target, storedPayload)
-	if err != nil {
-		return nil, err
-	}
-
-	return &preparedExecution{
+	plan := &preparedExecution{
 		exec:                    exec,
 		requestBody:             agentPayloadBytes,
 		agent:                   agent,
 		target:                  target,
 		targetType:              targetType,
 		llmEndpoint:             llmEndpoint,
+		slotHeld:                slotAcquired,
 		webhookRegistered:       webhookRegistered,
 		webhookError:            webhookError,
 		callerDID:               callerDID,
@@ -277,7 +282,9 @@ func (c *executionController) prepareExecutionForTargetWithAdmission(ctx context
 		replayBeforeExecutionID: headers.replayBeforeExecutionID,
 		replayMode:              headers.replayMode,
 		replayHit:               hit,
-	}, nil
+	}
+	slotTransferred = true
+	return plan, nil
 }
 
 // buildClientPayload builds the blob persisted as executions.input_payload,

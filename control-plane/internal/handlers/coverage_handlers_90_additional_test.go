@@ -142,20 +142,20 @@ func TestExecutionController_CompletionAndFailureCoverage(t *testing.T) {
 
 		now := time.Now().UTC()
 		require.NoError(t, store.CreateExecutionRecord(context.Background(), &types.Execution{
-			ExecutionID: "exec-success",
-			RunID:       "run-success",
-			AgentNodeID: agent.ID,
-			Status:      types.ExecutionStatusRunning,
+			ExecutionID:  "exec-success",
+			RunID:        "run-success",
+			AgentNodeID:  agent.ID,
+			Status:       types.ExecutionStatusRunning,
 			InputPayload: []byte(`{"prompt":"hello"}`),
-			CreatedAt:   now,
-			StartedAt:   now,
-			UpdatedAt:   now,
+			CreatedAt:    now,
+			StartedAt:    now,
+			UpdatedAt:    now,
 		}))
 
 		plan := &preparedExecution{
 			exec: &types.Execution{
-				ExecutionID: "exec-success",
-				RunID:       "run-success",
+				ExecutionID:  "exec-success",
+				RunID:        "run-success",
 				InputPayload: []byte(`{"prompt":"hello"}`),
 			},
 			agent:  agent,
@@ -217,6 +217,9 @@ func TestExecutionController_CompletionAndFailureCoverage(t *testing.T) {
 }
 
 func TestPrepareExecution_AdditionalCoverage(t *testing.T) {
+	previousLimiter := concurrencyLimiter
+	concurrencyLimiter = nil
+	t.Cleanup(func() { concurrencyLimiter = previousLimiter })
 	gin.SetMode(gin.TestMode)
 
 	t.Run("versioned serverless agent registers webhook and preserves headers", func(t *testing.T) {
@@ -433,6 +436,9 @@ func TestAsyncExecutionJob_ProcessFallbackCoverage(t *testing.T) {
 					requestBody: []byte(`{"prompt":"hello"}`),
 					agent:       agent,
 					target:      &parsedTarget{NodeID: agent.ID, TargetName: "reasoner-a", TargetType: "reasoner"},
+					// The slot was acquired above on behalf of this plan, so the
+					// job owns it and process() must release it exactly once.
+					slotHeld: true,
 				},
 			}
 
