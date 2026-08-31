@@ -217,6 +217,20 @@ type NodeHealthConfig struct {
 	// registers, allowing the departing process to finish accepted work.
 	// 0 = default 60s. Set to a negative duration to disable deferred cleanup.
 	AgentDrainGrace time.Duration `yaml:"agent_drain_grace" mapstructure:"agent_drain_grace"`
+	// AgentOrphanReapEnabled controls whether a replacement registration marks
+	// the departing instance's in-flight executions orphaned. Default true.
+	// Set false for deployments running replicas>1 behind one node id, where a
+	// sibling replica registering is indistinguishable from a replacement. A
+	// pointer preserves the distinction between omitted (default true) and an
+	// explicit false across YAML, Viper, database overlays, and programmatic use.
+	AgentOrphanReapEnabled *bool `yaml:"agent_orphan_reap_enabled" mapstructure:"agent_orphan_reap_enabled"`
+}
+
+// EffectiveAgentOrphanReapEnabled applies the documented zero-value default
+// for callers that construct NodeHealthConfig directly instead of using a
+// config loader.
+func (c NodeHealthConfig) EffectiveAgentOrphanReapEnabled() bool {
+	return c.AgentOrphanReapEnabled == nil || *c.AgentOrphanReapEnabled
 }
 
 // ExecutionCleanupConfig holds configuration for execution cleanup and garbage collection
@@ -581,6 +595,11 @@ func LoadConfig(configPath string) (*Config, error) {
 
 // ApplyDefaults fills values that should be stable across config loaders.
 func ApplyDefaults(cfg *Config) {
+	nodeHealth := &cfg.AgentField.NodeHealth
+	if nodeHealth.AgentOrphanReapEnabled == nil {
+		enabled := true
+		nodeHealth.AgentOrphanReapEnabled = &enabled
+	}
 	cleanup := &cfg.AgentField.ExecutionCleanup
 	// Cleanup is enabled by default so stale executions are still swept even
 	// when retention is disabled. A zero retention period intentionally means
@@ -782,6 +801,7 @@ func ApplyEnvOverrides(cfg *Config) {
 			cfg.AgentField.NodeHealth.AgentDrainGrace = d
 		}
 	}
+	applyOptionalBoolEnv("AGENTFIELD_AGENT_ORPHAN_REAP_ENABLED", &cfg.AgentField.NodeHealth.AgentOrphanReapEnabled)
 
 	// LLM health monitoring overrides
 	if val := os.Getenv("AGENTFIELD_LLM_HEALTH_ENABLED"); val != "" {
@@ -1053,6 +1073,24 @@ func applyBoolEnv(name string, target *bool) bool {
 		return true
 	}
 	return false
+}
+
+func applyOptionalBoolEnv(name string, target **bool) bool {
+	value := os.Getenv(name)
+	if value == "" {
+		return false
+	}
+	parsed, err := strconv.ParseBool(value)
+	if err != nil {
+		current := true
+		if *target != nil {
+			current = **target
+		}
+		log.Printf("warning: invalid %s=%q: %v; keeping %t", name, value, err, current)
+		return true
+	}
+	*target = &parsed
+	return true
 }
 
 func parseEnvBool(value string) bool {

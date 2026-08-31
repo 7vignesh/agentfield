@@ -63,9 +63,13 @@ Set an agent pod's `terminationGracePeriodSeconds` at least 15 seconds above its
 
 Agent registration is keyed by agent node ID and agent `version`. Keep `version` stable during an ordinary rollout: changing it creates a distinct registered version and bypasses the replacement-instance drain behavior described below.
 
-Agent Deployments must run `replicas: 1` today. Executions are stamped with the node row's current `InstanceID` — the last registrant — and the callback URL is a single field per node ID and version. The replacement path is triggered by *any* re-registration carrying a non-empty `instance_id` that differs from the stored one, not by rollouts specifically, so horizontal replicas of one node ID are indistinguishable from a replacement. The reap additionally sweeps non-terminal rows whose `instance_id` is empty (rows written by SDKs that predate instance stamping). Every shipped agent manifest already sets `replicas: 1`.
+Agent Deployments should normally run `replicas: 1` today. Executions are stamped with the node row's current `InstanceID` — the last registrant — and the callback URL is a single field per node ID and version. The replacement path is triggered by *any* re-registration carrying a non-empty `instance_id` that differs from the stored one, not by rollouts specifically, so horizontal replicas of one node ID are indistinguishable from a replacement. The reap additionally sweeps non-terminal rows whose `instance_id` is empty (rows written by SDKs that predate instance stamping). Every shipped agent manifest already sets `replicas: 1`.
+
+If an existing deployment runs `replicas > 1` behind one node ID, set `AGENTFIELD_AGENT_ORPHAN_REAP_ENABLED=false`. This prevents one sibling's registration from reaping another sibling's live work; the stale sweep controlled by `AGENTFIELD_EXECUTION_STALE_TIMEOUT` remains the backstop. It does not add per-replica routing or attribution, so a single replica remains the recommended topology.
 
 When a replacement instance registers with the same node ID and version, the control plane stops routing new work to the departing instance and gives its in-flight executions `AGENTFIELD_AGENT_DRAIN_GRACE` (default `60s`) to finish. This grace is implemented by an in-memory timer, so a control-plane restart loses the timer; the stale sweep controlled by `AGENTFIELD_EXECUTION_STALE_TIMEOUT` (default `30m`) remains the backstop. Executions are scoped by `instance_id`, so only work belonging to the departing instance is reaped.
+
+Do not treat `instance_id` as guaranteed pod attribution: only the Python SDK reports one today, so Go and TypeScript nodes leave it empty. Where it is reported it is a bare `uuid4().hex` that the SDK never logs. The only current path from that value to a pod is the control plane's re-registration reap log, which records `old_instance_id` and `new_instance_id` from the deferred reap goroutine.
 
 Dispatch to a node whose last heartbeat falls within the drain window is held for `AGENTFIELD_AGENT_RESTART_GRACE` (default `15s`) while a replacement can register. If none does, the request returns HTTP `503` with `Retry-After: 1`.
 
@@ -92,7 +96,7 @@ For an agent whose longest reasoner runs about 10 minutes:
 - control-plane env `AGENTFIELD_AGENT_DRAIN_GRACE: "12m"` — `11m` drain + 5s settlement + callback latency + headroom;
 - control-plane env `AGENTFIELD_AGENT_RESTART_GRACE: "15s"` — leave it at the default; see the warning below.
 
-Write these with unit suffixes. `AGENTFIELD_AGENT_DRAIN_GRACE` is parsed with plain Go duration syntax and has no bare-seconds fallback and no warning on failure, so a bare `660` is silently ignored and the `60s` default survives — unlike `AGENTFIELD_SHUTDOWN_TIMEOUT`, which does accept bare seconds and at least warns. `AGENTFIELD_AGENT_DRAIN_GRACE=0s` does **not** disable the reap: a zero value keeps the `60s` default. A negative duration makes the reap fire immediately. There is no opt-out.
+Write these with unit suffixes. `AGENTFIELD_AGENT_DRAIN_GRACE` is parsed with plain Go duration syntax and has no bare-seconds fallback and no warning on failure, so a bare `660` is silently ignored and the `60s` default survives — unlike `AGENTFIELD_SHUTDOWN_TIMEOUT`, which does accept bare seconds and at least warns. `AGENTFIELD_AGENT_DRAIN_GRACE=0s` does **not** disable the reap: a zero value keeps the `60s` default. A negative duration makes the reap fire immediately. To disable the deferred reap, set `AGENTFIELD_AGENT_ORPHAN_REAP_ENABLED=false` instead.
 
 ### What raising the drain grace costs
 
