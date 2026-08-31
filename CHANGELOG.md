@@ -6,6 +6,362 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.138-rc.6] - 2026-08-31
+
+
+### Added
+
+- Feat(control-plane): instance identity on execution reads and an orphan-reap kill switch for multi-replica agents (#1031)
+
+* feat(control-plane): expose agent_node_id/instance_id on execution reads
+
+When the re-registration reap fails an in-flight execution, the row's
+status_reason names the departing instance but nothing in any read API
+exposed which instance the execution was actually created against. An
+operator had no way to tell a genuinely orphaned execution from a legacy
+row that the reap swept because its instance_id was empty.
+
+Add agent_node_id and instance_id to ExecutionStatusResponse, populated in
+renderStatus -- the single builder GET /executions/:id, batch-status and
+the status callback all funnel through. Both are omitempty: instance_id
+vanishes for nodes that never report one (only the Python SDK does today),
+and agent_node_id stays absent on the synthetic not_found/error entries
+that handleBatchStatus builds inline, so those keep their current shape.
+
+The UI details DTO gains instance_id alongside the agent_node_id it
+already carried, so the DAG step drawer can surface it.
+
+No storage or schema change: migrations 033/035 added the columns and
+every execution SELECT already reads COALESCE(instance_id, '').
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* feat(control-plane): add an orphan-reap kill switch for multi-replica agents
+
+The deferred reap assumes a re-registration with a new instance_id means
+the previous OS process is gone. With replicas > 1 behind one node id that
+assumption is wrong: a sibling replica registering is indistinguishable
+from a replacement, so the reap fails the still-alive sibling's in-flight
+executions once the drain grace elapses (#987).
+
+Add AGENTFIELD_AGENT_ORPHAN_REAP_ENABLED (default true = today's
+behaviour). When false, the new conjunct on shouldReapOrphans means the
+deferred goroutine is never armed at all, and the stale-execution sweep
+stays as the backstop. Startup logs one greppable warning when disabled.
+
+Defaulting a bool to true needs presence tracking, since a zero value and
+an explicit `false` are otherwise identical. This follows the existing
+ExecutionCleanup.Enabled precedent and covers both loaders: yaml.v3 via an
+UnmarshalYAML hook on NodeHealthConfig, and viper -- which decodes through
+mapstructure and never calls that hook -- via IsSet in
+MarkExecutionCleanupEnabledIfSet. ApplyDefaults runs before
+ApplyEnvOverrides in all three load paths, so applyBoolEnv gets the last
+word and its existing warn-and-keep behaviour makes a garbage value fall
+back to true for free.
+
+The grace wiring moves into configureAgentRestartSettings so the startup
+behaviour is testable without booting a server.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* docs: document instance_id attribution and the orphan-reap kill switch
+
+EXECUTE.md enumerated the polling response's exact field list, so it went
+stale the moment the two new fields landed. Extend it, and state the
+semantics that are easy to get wrong: instance_id names the instance the
+execution was *created against* and is not re-stamped when a dispatch is
+replayed across an agent restart, so a restart-absorbed execution names
+the departed process even though the replacement ran the work.
+Re-stamping stays out of scope because that column is the reap scope key.
+
+EXECUTION_RESTART.md notes that the reap also sweeps rows whose
+instance_id is empty, which is exactly why the new explicit field is what
+lets an operator tell that legacy case apart from a real orphan.
+
+The k8s guide gains the replicas > 1 rationale for the new env var, and a
+warning not to treat instance_id as guaranteed pod attribution: only the
+Python SDK reports one, it is a bare uuid4().hex the SDK never logs, and
+the sole path from that value to a pod is the control plane's own
+re-registration reap log (old_instance_id / new_instance_id).
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(control-plane): preserve orphan reap config defaults
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (2d7fc72)
+
+- Feat(sdk-python): AgentMesh — host several agents in one process with in-process call resolution (#1026)
+
+* feat(sdk-python): add AgentMesh for hosting several agents in one process
+
+Refs #651 (v1: offline-only; the registered/online mode stays open).
+
+`AgentMesh([a, b])` mounts every member on one FastAPI app (`/{node_id}`)
+so a single uvicorn serves them all, and resolves `app.call()` between
+members in-process instead of round-tripping through the control plane.
+
+Dispatch goes through the target Agent's own ASGI app — Agent already
+subclasses FastAPI — so validation, the per-execution CostTracker,
+workflow events, DID and trigger unwrapping all run exactly as they do
+for an HTTP-routed execution. The ASGI scope/receive/send are built by
+hand rather than through `httpx.ASGITransport`, because httpx is not a
+declared runtime dependency of the SDK; the mesh adds no new dependency.
+
+Three hazards the implementation is built around:
+
+- `to_headers()` emits `X-Execution-ID`, and the reasoner endpoint turns
+  that header plus a non-empty `agentfield_server` into a fire-and-forget
+  202. `agentfield_server` defaults to http://localhost:8080 even with
+  AGENTFIELD_SERVER unset, so the header is popped unconditionally —
+  otherwise every mesh call would return {"status": "processing"}.
+- The target's `_execute_reasoner_endpoint` ends in `_clear_current()`.
+  The dispatch therefore runs in a child context (`asyncio.create_task`),
+  which keeps the caller's agent/execution contextvars intact, and
+  snapshots/restores the `Agent._current_agent` CLASS attribute that a
+  child context cannot protect.
+- Argument binding is left entirely to the existing `Agent.call` mapping
+  ladder (extracted verbatim into `_map_call_args`), so mesh and
+  control-plane paths bind identically — including the `arg_0` degradation
+  for a cross-node positional call. A mesh-only improvement here would be
+  a dev/prod trap.
+
+`Agent.call_local()` ships the same in-process dispatch as an explicit
+opt-in for a bare agent (Go SDK `CallLocal` parity); the intentionally
+DISABLED same-agent short-circuit in `call()` is untouched, so implicit
+short-circuiting still only happens inside a mesh.
+
+v1 is offline-only: members get `auto_register=False` and
+`AgentMesh(register=True)` raises NotImplementedError rather than
+registering members at a mounted path the control plane cannot route back
+to. An unknown node or member raises the new `MeshTargetNotFound` instead
+of the misleading "server unavailable" error, with no control-plane
+fallthrough. With no AgentMesh constructed, `call()` is unchanged.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* test(sdk-python): cover AgentMesh dispatch, lineage and shutdown behaviour
+
+Behaviour-level tests for every item of the AgentMesh contract, written
+against the public surface (`app.call`, `call_local`, `AgentMesh`, the
+mounted app over TestClient) rather than mesh internals.
+
+The regression guards worth calling out:
+
+- `test_mesh_does_not_forward_execution_id_header` pins the 202
+  fire-and-forget trap: it captures the headers actually handed to the
+  ASGI app and asserts x-execution-id is gone while x-run-id and
+  x-parent-execution-id survive.
+- `test_mesh_nested_a_b_a_current_agent_at_each_hop` walks a->b->a and
+  asserts both the contextvar and `Agent.get_current()` report the right
+  agent at every hop and after the outermost call returns.
+- `test_mesh_positional_binding_matches_control_plane` asserts the mesh
+  and control-plane paths bind the same call identically, so a mesh-only
+  binding improvement cannot silently reintroduce the dev/prod trap.
+- `test_call_semantics_unchanged_without_mesh` pins the exact existing
+  offline AgentFieldClientError text for an agent with no mesh.
+
+`agentfield.mesh` is added to the pytest `--cov` list because
+scripts/coverage-surface.sh runs pytest with only those targets, so a new
+module absent from the list produces no coverage rows and the required
+patch-coverage gate cannot see it.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* docs: document AgentMesh, call_local and the v1 limitations
+
+Adds docs/agent-mesh.md and a short README section pointing at it.
+
+Every limitation listed is one verified against the code rather than
+assumed: mesh calls carry no DID signature (so a member with
+local_verification=True would 401 its own traffic), the connection
+manager and memory-event client never connect because the mesh does not
+run AgentServer.serve()'s resilient startup lifecycle, child executions
+land at depth 0 because to_headers() never emits depth and from_request()
+never reads it, and both `Agent.get_current()` and the set_current_agent
+contextvar are last-writer-wins with several agents in one process —
+which is why the mesh resolves targets from its own registry and never
+from the ambient one.
+
+The error-mapping table is part of the contract: unknown node or member
+raises MeshTargetNotFound, a validation failure raises
+ExecuteError(status_code=422) exactly as the control-plane path does, and
+a reasoner exception becomes ExecutionFailedError with the original
+exception as __cause__.
+
+No new environment variable is introduced, so
+docs/ENVIRONMENT_VARIABLES.md is untouched.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(sdk-python): harden AgentMesh parity and shutdown
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (164fb7a)
+
+
+
+### Fixed
+
+- Fix(control-plane): gate every dispatch lane before persistence and complete the rejection contract (#1033)
+
+* fix(control-plane): admit executions before persistence on every dispatch lane
+
+The per-agent concurrency limit and the LLM circuit breaker were checked
+before persistence only on the async lane. On the sync, restart and MCP
+lanes the check ran *after* prepare had already written an executions row,
+a workflow_executions row and an input payload blob, so a gate-rejected
+request was charged a failed execution for work that was never attempted.
+
+There is now a single admission point, ahead of persistence, on all four
+lanes: prepareExecutionForTargetWithAdmission takes acquireSlot=true from
+the sync handler, the restart handler and the MCP start_run path, and the
+duplicate post-prepare gate blocks are gone. findReplayHit moves ahead of
+the gate so a replay hit — which never dials the agent — is never rejected
+by it and consumes no slot; the async lane no longer acquires and releases
+a slot for one. preparedExecution.slotHeld records whether a plan actually
+owns a slot, so every release site releases exactly what it took.
+
+Two other holes in the rejection contract close with it:
+
+- handleAsync abandoned the already-persisted row in "running" when
+  submitReserved found a stopped pool. It now terminates it through
+  failForControlPlaneShutdown (failed + status_reason
+  control_plane_shutdown on both tables), on a detached context because
+  the request context is very likely being cancelled by the same drain.
+- The restart and MCP queue-full paths reserved pool capacity only after
+  prepare, so a queue-full burst wrote rows and then failed them, and the
+  restart lane persisted status_reason internal_error while answering
+  concurrency_limit. reserve() is hoisted ahead of prepare on both, and a
+  single typed executionPreconditionError now feeds both failExecution and
+  the response.
+
+Retry-After is completed at the same time: writeExecutionError takes the
+value stamped on the error, else a per-category default, so llm_unavailable
+advertises the circuit breaker's remaining recovery window (default 30s,
+floor 1s) via the new LLMHealthMonitor.RetryAfterSeconds — circuitOpenedAt
+is unexported, so the window has to be computed inside services — while
+concurrency_limit and node_unavailable stay at 1 and non-retryable
+rejections (413, agent_pending_approval) still carry nothing.
+
+The stale reservation comment above pool.reserve() is corrected: the worker
+releases the reservation when its job returns, not on dequeue, so a
+reservation covers preparation, queue wait and the whole dispatch.
+
+Both gate halves are opt-in and off by default
+(AGENTFIELD_MAX_CONCURRENT_PER_AGENT=0, llm_health.enabled=false), so a
+stock deployment sees no behaviour change.
+
+Refs #986
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* test(control-plane): cover the execute admission gate and rejection contract
+
+One test per observable behaviour of the new admission point, written from
+the caller's side (HTTP status, headers, body, and what the store holds
+afterwards) rather than from the implementation:
+
+- sync concurrency and llm_unavailable rejections persist no executions
+  row, no workflow_executions row and no payload blob;
+- a replay hit against an agent already at its cap still returns 200/202
+  with X-AgentField-Replay-Hit, never dials the agent, and consumes no
+  slot;
+- the per-agent running count is 1 during a successful sync call and back
+  to 0 after success, an agent 5xx and a pre-gate precondition rejection;
+- restart rejections (gate and queue-full) persist nothing and carry
+  Retry-After plus retry_after;
+- an async request whose pool stops between reserve() and submitReserved
+  ends as failed/control_plane_shutdown on both tables with the slot
+  released exactly once;
+- writeExecutionError's Retry-After table, including that 413 and
+  agent_pending_approval carry neither header nor field;
+- LLMHealthMonitor.RetryAfterSeconds counts the window down, floors at 1,
+  and falls back to the configured recovery timeout (30s) when the circuit
+  is closed, the endpoint is unknown, or the receiver is nil;
+- an MCP start_run rejected by the gate persists nothing.
+
+Two existing fixtures build a preparedExecution by hand after acquiring a
+slot themselves; they now set slotHeld so the job still releases what they
+took. TestPrepareExecution_AdditionalCoverage pins the process-global
+limiter to nil, because prepareExecution now acquires a slot and its four
+direct calls would otherwise leak counts into unrelated tests.
+
+Refs #986
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* docs: describe the real execute admission model, not a lease-based queue
+
+README advertised "a durable PostgreSQL queue with lease-based processing,
+so a crash or a restart resumes where it left off". No such thing exists:
+the lease columns in migrations 011 and 013 are inert plumbing, and there
+is no acquisition, renewal or expiry-reclaim code anywhere in the tree.
+What the control plane actually does is admit work into a bounded
+in-process queue with backpressure (429/503 plus Retry-After) and, on
+graceful shutdown, terminate in-flight executions with status_reason
+control_plane_shutdown instead of silently dropping them. Both README
+claims now say that.
+
+Alongside it:
+
+- docs/api/EXECUTE.md said llm_unavailable carried no Retry-After. It now
+  does, advertising the circuit breaker's remaining recovery window, and a
+  new line under the table states that these pre-dispatch rejections
+  persist no rows — with the one exception of a request rejected after
+  preparation because the pool has already stopped.
+- docs/api/EXECUTION_RESTART.md records that the restart lane runs the same
+  admission checks before persistence and returns Retry-After on queue-full.
+- AGENTFIELD_EXEC_ASYNC_QUEUE_CAPACITY was documented as the number of
+  executions "waiting for a worker". The admission bound is really
+  workers + queue_capacity and a reservation is held across preparation,
+  queue wait and the worker's dispatch (up to 24h for a paused execution).
+
+Refs #986
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* test(control-plane): assert the restart lane persists the category it answers with
+
+The restart handler can still lose the race between reserve() and
+submitReserved when the pool stops in between. That branch is the one that
+used to answer concurrency_limit while writing status_reason
+internal_error, because the queue error was an untyped errors.New. Drive it
+through the same CreateExecutionRecord seam the async pool-stopped test
+uses and assert the persisted status_reason equals the error_category in
+the body, that Retry-After and retry_after are both present, and that the
+per-agent slot is released.
+
+Refs #986
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(control-plane): terminalize pool-stopped restart/MCP admissions through a detached context
+
+The restart and MCP submit-failure paths persisted the terminal state with
+the request context — during shutdown that context is likely already
+cancelled, stranding the freshly created rows in running (the same bug
+class #1001 fixed on the async lane). MCP also discarded the persistence
+error entirely. All three lanes now share one helper: detached bounded
+persistence context, failed/control_plane_shutdown on both tables, and a
+warn log carrying node_id and execution_id when persistence itself fails.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* style(control-plane): gofmt the admission fix
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+* fix(control-plane): balance admission ownership through shutdown
+
+* fix(control-plane): preserve replay input envelopes
+
+---------
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com> (2638b9e)
+
 ## [0.1.138-rc.5] - 2026-08-31
 
 
