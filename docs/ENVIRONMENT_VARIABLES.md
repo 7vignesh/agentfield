@@ -291,6 +291,19 @@ When the `AGENTFIELD_INFRON_*` vars are unset, these OpenRouter attribution valu
   an inherited numeric value for nested sessions. An explicit per-call `env`
   value wins over the derived depth.
 
+### LLM observability (Python SDK)
+
+- `AGENTFIELD_LITELLM_CALLBACKS`: Comma-separated LiteLLM callback names. When
+  unset or empty, AgentField registers nothing. Setting it also opts into the
+  execution-correlation metadata stamp for `app.ai` text completions.
+- `AGENTFIELD_LITELLM_METADATA=true`: Opt into the execution-correlation stamp
+  without configuring an AgentField-managed callback. Set it to `false` to
+  disable the stamp while retaining callback registration. When neither
+  observability variable is configured, stamping is off.
+
+See [LLM observability](llm-observability.md) for metadata fields, scope, and
+callback behavior.
+
 ### Tracing (control plane)
 
 - `AGENTFIELD_TRACING_ENABLED`: Set to `true` or `1` to enable tracing. Setting any of the endpoint variables below also enables it.
