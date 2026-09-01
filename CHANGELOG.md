@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.138-rc.7] - 2026-09-01
+
+
+### Added
+
+- Feat(sdk/python): isolate OpenCode harness runs (#1023) (0b90cf2)
+
 ## [0.1.138-rc.6] - 2026-08-31
 
 
