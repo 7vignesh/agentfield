@@ -6,6 +6,71 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.138-rc.9] - 2026-09-02
+
+
+### Chores
+
+- Chore(deps): bump the npm_and_yarn group across 2 directories with 2 updates (#1037)
+
+Bumps the npm_and_yarn group with 2 updates in the /control-plane/web/client directory: [browserslist](https://github.com/browserslist/browserslist) and [postcss-selector-parser](https://github.com/postcss/postcss-selector-parser).
+Bumps the npm_and_yarn group with 1 update in the /desktop directory: [browserslist](https://github.com/browserslist/browserslist).
+
+
+Updates `browserslist` from 4.28.0 to 4.28.8
+- [Release notes](https://github.com/browserslist/browserslist/releases)
+- [Changelog](https://github.com/browserslist/browserslist/blob/main/CHANGELOG.md)
+- [Commits](https://github.com/browserslist/browserslist/compare/4.28.0...4.28.8)
+
+Updates `postcss-selector-parser` from 6.1.2 to 6.1.4
+- [Release notes](https://github.com/postcss/postcss-selector-parser/releases)
+- [Changelog](https://github.com/postcss/postcss-selector-parser/blob/main/CHANGELOG.md)
+- [Commits](https://github.com/postcss/postcss-selector-parser/compare/v6.1.2...6.1.4)
+
+Updates `browserslist` from 4.28.5 to 4.28.8
+- [Release notes](https://github.com/browserslist/browserslist/releases)
+- [Changelog](https://github.com/browserslist/browserslist/blob/main/CHANGELOG.md)
+- [Commits](https://github.com/browserslist/browserslist/compare/4.28.0...4.28.8)
+
+---
+updated-dependencies:
+- dependency-name: browserslist
+  dependency-version: 4.28.8
+  dependency-type: indirect
+  dependency-group: npm_and_yarn
+- dependency-name: postcss-selector-parser
+  dependency-version: 6.1.4
+  dependency-type: indirect
+  dependency-group: npm_and_yarn
+- dependency-name: browserslist
+  dependency-version: 4.28.8
+  dependency-type: indirect
+  dependency-group: npm_and_yarn
+...
+
+Signed-off-by: dependabot[bot] <support@github.com>
+Co-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com> (5210726)
+
+- Chore(deps): bump google.golang.org/grpc (#1036)
+
+Bumps the go_modules group with 1 update in the /control-plane directory: [google.golang.org/grpc](https://github.com/grpc/grpc-go).
+
+
+Updates `google.golang.org/grpc` from 1.82.1 to 1.83.1
+- [Release notes](https://github.com/grpc/grpc-go/releases)
+- [Commits](https://github.com/grpc/grpc-go/compare/v1.82.1...v1.83.1)
+
+---
+updated-dependencies:
+- dependency-name: google.golang.org/grpc
+  dependency-version: 1.83.1
+  dependency-type: direct:production
+  dependency-group: go_modules
+...
+
+Signed-off-by: dependabot[bot] <support@github.com>
+Co-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com> (c831d89)
+
 ## [0.1.138-rc.8] - 2026-09-02
 
 
