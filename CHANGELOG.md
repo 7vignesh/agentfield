@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.138-rc.8] - 2026-09-02
+
+
+### Added
+
+- Feat(sdk/python): expose provider-agnostic harness variants (#1024) (d32caf6)
+
 ## [0.1.138-rc.7] - 2026-09-01
 
 
