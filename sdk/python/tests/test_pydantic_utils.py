@@ -1,5 +1,6 @@
+import pytest
 from typing import List, Optional, Sequence, Union
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from agentfield.pydantic_utils import (
     is_pydantic_model,
     is_optional_type,
@@ -117,14 +118,11 @@ def test_convert_validation_error_propagation():
     def my_func(m: MyModel):
         return m
 
-    raised = False
-    try:
-        convert_function_args(my_func, (), {"m": {"x": "not-an-int"}})
-    except Exception:
-        raised = True
-    # A model parameter that fails validation must surface the error, not be
+    # A model parameter that fails validation must surface a pydantic
+    # ValidationError (callers intercept that type specifically), not be
     # silently returned as the raw dict.
-    assert raised
+    with pytest.raises(ValidationError):
+        convert_function_args(my_func, (), {"m": {"x": "not-an-int"}})
 
 
 # --- #1034: complex type hints (unions of models, containers of models) ---
@@ -204,12 +202,8 @@ def test_container_of_models_validation_error_propagates():
     def f(items: List[M1]):
         return items
 
-    raised = False
-    try:
+    with pytest.raises(ValidationError):
         convert_function_args(f, (), {"items": [{"a": "bad"}]})
-    except Exception:
-        raised = True
-    assert raised
 
 
 def test_non_model_params_untouched_for_complex_hints():

@@ -172,14 +172,11 @@ def convert_function_args(
                 converted_kwargs[param_name] = value
                 continue
 
-            try:
-                converted_kwargs[param_name] = _convert_with_type_hint(value, type_hint)
-            except ValidationError as e:
-                # Add parameter context to the error, preserving the original
-                # ValidationError as the cause.
-                raise ValueError(
-                    f"Validation error for parameter '{param_name}': {e}"
-                ) from e
+            # Let a ValidationError from TypeAdapter propagate unchanged: the SDK
+            # call sites intercept pydantic.ValidationError to route bad payloads
+            # through their safe-validation path (e.g. _HandlerInputError), so
+            # re-wrapping it as another type would bypass that handling.
+            converted_kwargs[param_name] = _convert_with_type_hint(value, type_hint)
 
         # Convert back to args and kwargs based on original call pattern
         final_args = []
@@ -198,10 +195,10 @@ def convert_function_args(
 
         return tuple(final_args), final_kwargs
 
-    except (ValidationError, ValueError):
-        # Validation failures must surface: coercing a model parameter that
-        # does not match its schema is a real error, not something to hide
-        # behind the raw dict.
+    except ValidationError:
+        # Validation failures must surface as ValidationError: coercing a model
+        # parameter that does not match its schema is a real error, and callers
+        # intercept ValidationError specifically to handle it safely.
         raise
     except Exception as e:
         # Non-validation failures (e.g. unresolved forward refs in a hint) fall
