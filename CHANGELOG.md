@@ -6,6 +6,81 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.138-rc.10] - 2026-09-04
+
+
+### Chores
+
+- Chore(deps): bump the npm_and_yarn group across 3 directories with 3 updates (#1039)
+
+Bumps the npm_and_yarn group with 1 update in the /control-plane/web/client directory: [@humanfs/node](https://github.com/humanwhocodes/humanfs/tree/HEAD/packages/node).
+Bumps the npm_and_yarn group with 1 update in the /desktop directory: [@xmldom/xmldom](https://github.com/xmldom/xmldom).
+Bumps the npm_and_yarn group with 1 update in the /examples/benchmarks/100k-scale/mastra-bench directory: [qs](https://github.com/ljharb/qs).
+
+
+Updates `@humanfs/node` from 0.16.6 to 0.16.7
+- [Release notes](https://github.com/humanwhocodes/humanfs/releases)
+- [Changelog](https://github.com/humanwhocodes/humanfs/blob/main/packages/node/CHANGELOG.md)
+- [Commits](https://github.com/humanwhocodes/humanfs/commits/node-v0.16.7/packages/node)
+
+Updates `@xmldom/xmldom` from 0.8.13 to 0.8.15
+- [Release notes](https://github.com/xmldom/xmldom/releases)
+- [Changelog](https://github.com/xmldom/xmldom/blob/master/CHANGELOG.md)
+- [Commits](https://github.com/xmldom/xmldom/compare/0.8.13...0.8.15)
+
+Updates `qs` from 6.15.2 to 6.16.0
+- [Changelog](https://github.com/ljharb/qs/blob/main/CHANGELOG.md)
+- [Commits](https://github.com/ljharb/qs/compare/v6.15.2...v6.16.0)
+
+---
+updated-dependencies:
+- dependency-name: "@humanfs/node"
+  dependency-version: 0.16.7
+  dependency-type: indirect
+  dependency-group: npm_and_yarn
+- dependency-name: "@xmldom/xmldom"
+  dependency-version: 0.8.15
+  dependency-type: indirect
+  dependency-group: npm_and_yarn
+- dependency-name: qs
+  dependency-version: 6.16.0
+  dependency-type: indirect
+  dependency-group: npm_and_yarn
+...
+
+Signed-off-by: dependabot[bot] <support@github.com>
+Co-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com> (c9e3bcb)
+
+- Chore(deps): bump the npm_and_yarn group across 1 directory with 2 updates (#1038)
+
+Bumps the npm_and_yarn group with 2 updates in the /examples/python_agent_nodes/rag_evaluation/ui directory: [browserslist](https://github.com/browserslist/browserslist) and [postcss-selector-parser](https://github.com/postcss/postcss-selector-parser).
+
+
+Updates `browserslist` from 4.28.2 to 4.28.8
+- [Release notes](https://github.com/browserslist/browserslist/releases)
+- [Changelog](https://github.com/browserslist/browserslist/blob/main/CHANGELOG.md)
+- [Commits](https://github.com/browserslist/browserslist/compare/4.28.2...4.28.8)
+
+Updates `postcss-selector-parser` from 6.1.2 to 6.1.4
+- [Release notes](https://github.com/postcss/postcss-selector-parser/releases)
+- [Changelog](https://github.com/postcss/postcss-selector-parser/blob/main/CHANGELOG.md)
+- [Commits](https://github.com/postcss/postcss-selector-parser/compare/v6.1.2...6.1.4)
+
+---
+updated-dependencies:
+- dependency-name: browserslist
+  dependency-version: 4.28.8
+  dependency-type: indirect
+  dependency-group: npm_and_yarn
+- dependency-name: postcss-selector-parser
+  dependency-version: 6.1.4
+  dependency-type: indirect
+  dependency-group: npm_and_yarn
+...
+
+Signed-off-by: dependabot[bot] <support@github.com>
+Co-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com> (1a50760)
+
 ## [0.1.138-rc.9] - 2026-09-02
 
 
