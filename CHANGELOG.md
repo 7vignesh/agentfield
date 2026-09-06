@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.138-rc.12] - 2026-09-06
+
+
+### Testing
+
+- Test: expand event publish helper coverage (#1016) (b62eec9)
+
 ## [0.1.138-rc.11] - 2026-09-06
 
 
