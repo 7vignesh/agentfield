@@ -135,7 +135,9 @@ func AddExecutionNoteHandler(storageProvider ExecutionNoteStorage, ownershipEnfo
 
 			// Add the new note
 			execution.Notes = append(execution.Notes, note)
-			execution.UpdatedAt = time.Now()
+			// Persist in UTC so the stored text carries no local zone offset,
+			// which would break the stale-execution reaper on SQLite (#1040).
+			execution.UpdatedAt = time.Now().UTC()
 
 			return execution, nil
 		})

@@ -1923,7 +1923,7 @@ func (ls *LocalStorage) executeWorkflowInsert(ctx context.Context, q DBTX, execu
 			execution.ApprovalRequestID, execution.ApprovalRequestURL, execution.ApprovalStatus,
 			execution.ApprovalResponse, execution.ApprovalRequestedAt, execution.ApprovalRespondedAt,
 			execution.ApprovalCallbackURL, execution.ApprovalExpiresAt,
-			notesJSON, time.Now(), execution.ExecutionID)
+			notesJSON, time.Now().UTC(), execution.ExecutionID)
 
 		if err != nil {
 			return fmt.Errorf("failed to update workflow execution: %w", err)
@@ -1947,12 +1947,14 @@ func (ls *LocalStorage) executeWorkflowInsert(ctx context.Context, q DBTX, execu
 		return fmt.Errorf("failed to marshal notes: %w", err)
 	}
 
-	// Set default timestamps if not provided
+	// Set default timestamps if not provided. Persist in UTC so the stored
+	// text carries no local zone offset: a non-UTC offset breaks the reaper's
+	// timestamp comparison on SQLite (#1040).
 	if execution.CreatedAt.IsZero() {
-		execution.CreatedAt = time.Now()
+		execution.CreatedAt = time.Now().UTC()
 	}
 	if execution.UpdatedAt.IsZero() {
-		execution.UpdatedAt = time.Now()
+		execution.UpdatedAt = time.Now().UTC()
 	}
 
 	// Execute INSERT query using the DBTX interface
@@ -2107,12 +2109,13 @@ func (ls *LocalStorage) executeWorkflowInsertWithTx(ctx context.Context, tx DBTX
 			total_duration_ms = excluded.total_duration_ms,
 			updated_at = excluded.updated_at`
 
-	// Set default timestamps if not provided
+	// Set default timestamps if not provided. Persist in UTC so the stored
+	// text carries no local zone offset (see #1040).
 	if workflow.CreatedAt.IsZero() {
-		workflow.CreatedAt = time.Now()
+		workflow.CreatedAt = time.Now().UTC()
 	}
 	if workflow.UpdatedAt.IsZero() {
-		workflow.UpdatedAt = time.Now()
+		workflow.UpdatedAt = time.Now().UTC()
 	}
 
 	// Marshal workflow tags

@@ -6,6 +6,50 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.138-rc.12] - 2026-09-06
+
+
+### Testing
+
+- Test: expand event publish helper coverage (#1016) (b62eec9)
+
+## [0.1.138-rc.11] - 2026-09-06
+
+
+### Fixed
+
+- Fix(control-plane): compare execution timestamps by instant on SQLite (#1040) (#1041)
+
+On a non-UTC host using local SQLite storage, the stale-execution reaper could
+mark a fresh, active execution as timed out within seconds of starting. Later
+successful status callbacks were then rejected with HTTP 409 because the row
+had already become terminal.
+
+Root cause: SQLite compares timestamp columns as text. Write paths persisted
+timestamps with time.Now(), so on a non-UTC host they carried a local zone
+offset (e.g. "...-05:00"). A fresh local value sorts lexically before a UTC
+cutoff even though its instant is newer, so the reaper's
+COALESCE(updated_at, created_at, started_at) <= cutoff test matched rows that
+were not actually stale.
+
+Fix has two layers:
+
+1. Read path: wrap the timestamp comparison and ORDER BY in julianday() for
+   SQLite so the comparison is instant-aware and offset-correct. Postgres uses
+   timestamptz (already instant-aware) and has no julianday(), so the Postgres
+   query path is left unchanged via a dialect-aware helper. This covers rows
+   already persisted with an offset.
+
+2. Write path: normalize execution and workflow created_at/updated_at to
+   time.Now().UTC() so newly stored rows never carry a local offset. This is
+   the durable fix.
+
+Applies to MarkStaleExecutions, MarkStaleWorkflowExecutions, and
+RetryStaleWorkflowExecutions.
+
+Adds regression tests covering fresh and genuinely stale rows stored with a
+non-UTC offset, for both the mark-stale and retry-selection paths. (1ae0e5a)
+
 ## [0.1.138-rc.10] - 2026-09-04
 
 

@@ -12,6 +12,25 @@ import (
 	"github.com/Agent-Field/agentfield/control-plane/pkg/types"
 )
 
+// staleTimestampExpr returns the SQL expression used to compare an execution's
+// most recent activity timestamp against the stale cutoff.
+//
+// SQLite stores timestamps as text and compares them lexically. When a host
+// runs in a non-UTC timezone, time.Now() persists values carrying a local zone
+// offset (e.g. "...-05:00"), and a fresh local value can sort BEFORE a UTC
+// cutoff even though its instant is newer, wrongly reaping active executions
+// (#1040). Wrapping the value in julianday() forces an instant-aware numeric
+// comparison that is offset-correct.
+//
+// Postgres columns are timestamptz and already compare by instant, and
+// julianday() does not exist there, so Postgres keeps the plain expression.
+func (ls *LocalStorage) staleTimestampExpr(col string) string {
+	if ls.requireSQLDB().Mode() == "postgres" {
+		return col
+	}
+	return "julianday(" + col + ")"
+}
+
 // maxNodesForDepthCalc caps the number of executions for which we compute DAG depth to avoid heavy queries.
 const maxNodesForDepthCalc = 1000
 
@@ -1177,17 +1196,19 @@ func (ls *LocalStorage) MarkStaleExecutions(ctx context.Context, staleAfter time
 	cutoff := time.Now().UTC().Add(-staleAfter)
 
 	db := ls.requireSQLDB()
+	tsExpr := ls.staleTimestampExpr("COALESCE(updated_at, created_at, started_at)")
+	cutoffExpr := ls.staleTimestampExpr("?")
 	rows, err := db.QueryContext(ctx, `
 		SELECT execution_id, started_at
 		FROM executions e
 		WHERE status IN ('running', 'pending', 'queued')
-		  AND COALESCE(updated_at, created_at, started_at) <= ?
+		  AND `+tsExpr+` <= `+cutoffExpr+`
 		  AND NOT EXISTS (
 		      SELECT 1 FROM executions c
 		      WHERE c.parent_execution_id = e.execution_id
 		        AND c.status IN ('running', 'pending', 'queued')
 		  )
-		ORDER BY COALESCE(updated_at, created_at, started_at) ASC
+		ORDER BY `+tsExpr+` ASC
 		LIMIT ?`, cutoff, limit)
 	if err != nil {
 		return 0, fmt.Errorf("query stale executions: %w", err)
@@ -1290,18 +1311,20 @@ func (ls *LocalStorage) MarkStaleWorkflowExecutions(ctx context.Context, staleAf
 	cutoff := time.Now().UTC().Add(-staleAfter)
 
 	db := ls.requireSQLDB()
+	tsExpr := ls.staleTimestampExpr("COALESCE(updated_at, created_at, started_at)")
+	cutoffExpr := ls.staleTimestampExpr("?")
 	rows, err := db.QueryContext(ctx, `
 		SELECT execution_id, started_at
 		FROM workflow_executions w
 		WHERE status IN ('running', 'pending', 'queued', 'waiting')
-		  AND COALESCE(updated_at, created_at, started_at) <= ?
+		  AND `+tsExpr+` <= `+cutoffExpr+`
 		  AND COALESCE(approval_status, '') != 'pending'
 		  AND NOT EXISTS (
 		      SELECT 1 FROM workflow_executions c
 		      WHERE c.parent_execution_id = w.execution_id
 		        AND c.status IN ('running', 'pending', 'queued', 'waiting')
 		  )
-		ORDER BY COALESCE(updated_at, created_at, started_at) ASC
+		ORDER BY `+tsExpr+` ASC
 		LIMIT ?`, cutoff, limit)
 	if err != nil {
 		return 0, fmt.Errorf("query stale workflow executions: %w", err)
@@ -1497,14 +1520,16 @@ func (ls *LocalStorage) RetryStaleWorkflowExecutions(ctx context.Context, staleA
 
 	cutoff := time.Now().UTC().Add(-staleAfter)
 	db := ls.requireSQLDB()
+	tsExpr := ls.staleTimestampExpr("COALESCE(updated_at, created_at, started_at)")
+	cutoffExpr := ls.staleTimestampExpr("?")
 
 	rows, err := db.QueryContext(ctx, `
 		SELECT execution_id
 		FROM workflow_executions
 		WHERE status IN ('running', 'pending', 'queued')
 		  AND retry_count < ?
-		  AND COALESCE(updated_at, created_at, started_at) <= ?
-		ORDER BY COALESCE(updated_at, created_at, started_at) ASC
+		  AND `+tsExpr+` <= `+cutoffExpr+`
+		ORDER BY `+tsExpr+` ASC
 		LIMIT ?`, maxRetries, cutoff, limit)
 	if err != nil {
 		return nil, fmt.Errorf("query retriable workflow executions: %w", err)
