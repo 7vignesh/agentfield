@@ -6,6 +6,65 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.139-rc.2] - 2026-09-15
+
+
+### Added
+
+- Feat(go-sdk): add Cursor CLI harness provider (#293) (#1057)
+
+* feat(go-sdk): add Cursor CLI harness provider
+
+Closes #293 (part of epic #291). Adds CursorProvider to the Go SDK
+harness, following the same pattern as the existing codex/gemini
+providers.
+
+- cursor.go: CursorProvider runs 'agent -p --force --trust
+  --output-format json <prompt>', mapping ProjectDir/Cwd to --workspace,
+  Model (with #variant stripped) to --model, ResumeSessionID to
+  --resume, and PermissionMode=plan to --mode plan. Parses the single
+  JSON result object for result text and session_id, with a raw-text
+  fallback for non-JSON stdout. Standard missing-binary, timeout, and
+  non-zero-exit handling via the shared RunCLI.
+- provider.go: add ProviderCursor = "cursor" constant.
+- factory.go: register cursor in BuildProvider.
+- cursor_test.go: 15 tests using an injectable runCLI (no real
+  subprocess), covering execution, JSON parsing, session resume,
+  timeout, missing binary, flag wiring, and error classification.
+  Coverage on cursor.go: NewCursorProvider 100%, Execute 94.1%,
+  parseJSONOutput 100%.
+
+* test(go-sdk): update provider invariants for registered cursor provider
+
+Registering cursor as a known provider broke three existing harness
+tests that hardcoded the provider set:
+- runner_invariant_test.go: remove "cursor" from the unknown-names
+  list (it now resolves) and add ProviderCursor to the exhaustiveness
+  list of known providers.
+- factory_test.go: include "cursor" in the expected BuildProvider
+  error-message provider list.
+
+These were masked locally by pre-existing Windows-only shell-script
+test failures; CI (Linux) surfaced them. (2e6c575)
+
+
+
+### Fixed
+
+- Fix(sessions): expose turn detection and barge-in configuration across SDKs (#1056)
+
+* fix(sessions): expose validated turn detection across SDKs
+
+Signed-off-by: WANG Qingmin <75425799+FriendlyPasser@users.noreply.github.com>
+
+* test(sessions): cover config parsing and invalid offer targets
+
+Signed-off-by: WANG Qingmin <75425799+FriendlyPasser@users.noreply.github.com>
+
+---------
+
+Signed-off-by: WANG Qingmin <75425799+FriendlyPasser@users.noreply.github.com> (9e69229)
+
 ## [0.1.139-rc.1] - 2026-09-10
 
 
