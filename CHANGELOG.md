@@ -6,6 +6,102 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.139-rc.5] - 2026-09-18
+
+
+### CI
+
+- Ci(python-sdk): enforce mypy with module-by-module allowlist ratchet (#971) (#1052)
+
+* ci(python-sdk): enforce mypy with module-by-module allowlist ratchet
+
+Adopts the mypy half of #620 (the ruff half shipped in #812). mypy.ini
+existed but nothing ran it. This wires a required mypy step into the
+Python SDK CI without changing any behavior.
+
+Phase 1 of #971:
+- Pin mypy==1.18.2 in the dev extras (and uv.lock).
+- Add a per-module ignore_errors allowlist to mypy.ini for the 34
+  modules that currently have type errors, so the gate can be enforced
+  now and the allowlist shrunk module by module.
+- Add a 'Type check (mypy)' step to .github/workflows/sdk-python.yml
+  running 'mypy --config-file mypy.ini agentfield/'.
+
+The gate is green today (Success: no issues found). It fails if a
+non-allowlisted module gains a new error, or if a module is removed
+from the allowlist while it still has errors. No '# type: ignore'
+sprinkles were added.
+
+* ci(python-sdk): pin types-requests so mypy gate is reproducible
+
+Addresses review on #1052. The locked dev environment pins
+requests 2.33.1, which ships no type stubs, so 'uv sync --extra dev'
+followed by mypy failed with [import-untyped] in multimodal.py and
+agent_field_handler.py. CI was green only because 'pip install .[dev]'
+resolved a newer requests that bundles stubs, so it wasn't validating
+the reproducible environment.
+
+Pin types-requests==2.33.0.20260906 in the dev extras (and uv.lock) so
+mypy passes in both the locked (uv sync) and pip-resolved environments.
+Verified mypy clean against the locked requests 2.33.1 and a newer
+requests; ruff still clean; uv lock --check clean.
+
+* ci(python-sdk): allowlist session_turn_detection for mypy ratchet
+
+session_turn_detection.py landed on main (via #1056) after this PR
+opened and carries 3 mypy errors (loosely-typed dict value used in
+numeric comparisons at line 58). The mypy gate correctly failed on it
+because it was not allowlisted - the ratchet working as designed.
+
+Add it to the allowlist to keep this PR a pure CI-wiring change; the
+module's type errors can be cleaned in a follow-up (phase 2). (8c3e084)
+
+
+
+### Fixed
+
+- Fix(security): close open Dependabot vulnerability alerts (#1055)
+
+* fix(security): close open Dependabot vulnerability alerts
+
+Bump vulnerable dependencies across the monorepo to patched releases:
+
+- next 15.5.25 + sharp 0.35.4 (rag evaluation UI RCE / libheif)
+- js-yaml 4.3.2 (empty merge-source CPU DoS)
+- fast-uri 3.1.7 (host confusion / SSRF)
+- google.golang.org/grpc v1.83.2 (xDS authority DoS)
+- browserslist 4.28.9 + baseline-browser-mapping 2.11.23
+- hono 4.13.7 (toSSG path traversal)
+- qs 6.16.0 (arrayLimit / isBuffer DoS)
+- vitest / @vitest/mocker 4.1.11 (redirect mock path traversal)
+
+Regenerated affected npm/pnpm lockfiles and go.sum.
+
+Co-authored-by: Santosh kumar <santoshkumarradha@users.noreply.github.com>
+
+* fix(security): regenerate npm lockfiles for npm ci sync
+
+Full npm install (not package-lock-only) so control-plane web client
+and desktop locks include all transitive deps required by npm ci.
+
+Co-authored-by: Santosh kumar <santoshkumarradha@users.noreply.github.com>
+
+* fix(security): close remaining Dependabot alerts
+
+- @humanfs/node 0.16.8 (pnpm lock still had 0.16.7 symlink copy)
+- postcss-selector-parser 6.1.4 (pnpm lock still had 6.1.2 AST DoS)
+- @ai-sdk/provider-utils 4.0.51 including v5/v6 aliases (resource consumption)
+
+Vitest 4.1.11, hono 4.13.7, and esbuild 0.28.1 were already patched
+on this branch for the related alerts.
+
+Co-authored-by: Santosh kumar <santoshkumarradha@users.noreply.github.com>
+
+---------
+
+Co-authored-by: Cursor Agent <cursoragent@cursor.com>
+Co-authored-by: Santosh kumar <santoshkumarradha@users.noreply.github.com> (44d1022)
+
 ## [0.1.139-rc.4] - 2026-09-18
 
 
