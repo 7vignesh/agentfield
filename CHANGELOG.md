@@ -6,6 +6,60 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.139-rc.6] - 2026-09-18
+
+
+### Chores
+
+- Chore(deps): bump the go_modules group across 1 directory with 2 updates (#1060)
+
+* chore(deps): bump the go_modules group across 1 directory with 2 updates
+
+Bumps the go_modules group with 2 updates in the /control-plane directory: [go.opentelemetry.io/otel/sdk](https://github.com/open-telemetry/opentelemetry-go) and [google.golang.org/grpc](https://github.com/grpc/grpc-go).
+
+
+Updates `go.opentelemetry.io/otel/sdk` from 1.44.0 to 1.46.0
+- [Release notes](https://github.com/open-telemetry/opentelemetry-go/releases)
+- [Changelog](https://github.com/open-telemetry/opentelemetry-go/blob/main/CHANGELOG.md)
+- [Commits](https://github.com/open-telemetry/opentelemetry-go/compare/v1.44.0...v1.46.0)
+
+Updates `google.golang.org/grpc` from 1.83.1 to 1.83.2
+- [Release notes](https://github.com/grpc/grpc-go/releases)
+- [Commits](https://github.com/grpc/grpc-go/compare/v1.83.1...v1.83.2)
+
+---
+updated-dependencies:
+- dependency-name: go.opentelemetry.io/otel/sdk
+  dependency-version: 1.46.0
+  dependency-type: direct:production
+  dependency-group: go_modules
+- dependency-name: google.golang.org/grpc
+  dependency-version: 1.83.2
+  dependency-type: direct:production
+  dependency-group: go_modules
+...
+
+Signed-off-by: dependabot[bot] <support@github.com>
+
+* fix(observability): keep /v1/traces on full-URL OTLP HTTP endpoints after otel 1.46 bump
+
+OpenTelemetry 1.46 stopped appending the default trace signal path for
+WithEndpointURL (open-telemetry/opentelemetry-go#8538). Normalize pathless
+and root full HTTP endpoints to /v1/traces before constructing the exporter
+while preserving explicit collector paths and leaving gRPC behavior unchanged.
+
+Cover the root, trailing-slash, and custom-path cases so future dependency
+updates cannot silently change the request target again.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+
+---------
+
+Signed-off-by: dependabot[bot] <support@github.com>
+Co-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com>
+Co-authored-by: Claude Fable 5.1 <noreply@anthropic.com> (c7bcce9)
+
 ## [0.1.139-rc.5] - 2026-09-18
 
 
