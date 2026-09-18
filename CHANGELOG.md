@@ -6,6 +6,40 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.139-rc.3] - 2026-09-18
+
+
+### Added
+
+- Feat(examples): add optional Serply search backend to deep_research (#1058)
+
+Adds `SEARCH_PROVIDER=serply` alongside the existing Tavily default and
+the Parallel Search opt-in, following the same shape as the Parallel
+backend: one normalizer, one async executor, one dispatch branch, and no
+new entry in requirements.txt.
+
+Serply answers from Google's result pages and needs an API key, so the
+backend reads SERPLY_API_KEY and fails with the same message shape the
+Tavily path already uses when its key is missing.
+
+Two details specific to this API are handled explicitly:
+
+- `num` is an approximate upper bound with a ceiling of 10, so the client
+  requests the ceiling and trims to the example's own five-result budget
+  rather than trusting the count it gets back.
+- Errors arrive as a non-2xx with a JSON `detail` string, so the failure
+  message carries that text instead of a bare status code. (6d36643)
+
+
+
+### Fixed
+
+- Fix(sdk/go): return isolated session definitions (#1044)
+
+* fix(sdk/go): return isolated session definitions
+
+* fix(sdk/go): distinguish overlapping slice views (7a1714e)
+
 ## [0.1.139-rc.2] - 2026-09-15
 
 
