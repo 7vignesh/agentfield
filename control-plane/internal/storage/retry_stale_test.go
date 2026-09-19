@@ -539,6 +539,160 @@ func TestRetryStaleWorkflowExecutions_TerminalPairedExecutionStillRetried(t *tes
 		"the terminal execution half must keep its committed timestamp")
 }
 
+// TestStaleParentWithLiveChildIsSparedByReaperAndRetry is the regression for
+// the reaper's parent/child guard leaking into the retry sweep: a parent whose
+// own workflow and execution clocks are stale while it waits on a live child
+// must be spared by MarkStaleWorkflowExecutions and, equally, by
+// RetryStaleWorkflowExecutions. Without the child guard in the retry, the
+// parent is reset to pending and its paired execution is dragged back to
+// pending while the child is still working.
+func TestStaleParentWithLiveChildIsSparedByReaperAndRetry(t *testing.T) {
+	ls, ctx := setupRetryTestStorage(t)
+	now := time.Now().UTC()
+	staleAt := now.Add(-2 * time.Hour)
+
+	// Parent: both clocks are two hours stale, so absent the child guard it is
+	// a candidate for both sweeps.
+	const parentID = "exec-parent-live-child"
+	require.NoError(t, ls.StoreWorkflowExecution(ctx, retryTestWorkflow(parentID, staleAt)))
+	require.NoError(t, ls.CreateExecutionRecord(ctx, retryTestExecution(parentID, staleAt)))
+	backdateExecutionUpdatedAt(t, ls, "executions", parentID, staleAt)
+
+	// Child: created now, still running, and parented to the parent. Its
+	// activity is what must shield the parent.
+	const childID = "exec-child-live"
+	childWorkflow := retryTestWorkflow(childID, now)
+	childWorkflow.ParentExecutionID = strPtr(parentID)
+	require.NoError(t, ls.StoreWorkflowExecution(ctx, childWorkflow))
+
+	childExecution := retryTestExecution(childID, now)
+	childExecution.ParentExecutionID = strPtr(parentID)
+	require.NoError(t, ls.CreateExecutionRecord(ctx, childExecution))
+
+	parentBefore, err := ls.GetWorkflowExecution(ctx, parentID)
+	require.NoError(t, err)
+	childBefore, err := ls.GetWorkflowExecution(ctx, childID)
+	require.NoError(t, err)
+	childExecutionBefore, err := ls.GetExecutionRecord(ctx, childID)
+	require.NoError(t, err)
+
+	reaped, err := ls.MarkStaleWorkflowExecutions(ctx, 30*time.Minute, 100)
+	require.NoError(t, err)
+	require.Equal(t, 0, reaped, "a live child must shield its parent from the reaper")
+
+	retried, err := ls.RetryStaleWorkflowExecutions(ctx, 30*time.Minute, 3, 100)
+	require.NoError(t, err)
+	require.Empty(t, retried, "a live child must shield its parent from the retry sweep")
+
+	parent, err := ls.GetWorkflowExecution(ctx, parentID)
+	require.NoError(t, err)
+	require.Equal(t, "running", parent.Status)
+	require.Equal(t, 0, parent.RetryCount)
+	require.Nil(t, parent.ErrorMessage)
+	require.Nil(t, parent.CompletedAt)
+	require.True(t, parent.UpdatedAt.Equal(parentBefore.UpdatedAt),
+		"the parent must keep its committed updated_at")
+
+	parentExecution, err := ls.GetExecutionRecord(ctx, parentID)
+	require.NoError(t, err)
+	require.Equal(t, "running", parentExecution.Status)
+
+	child, err := ls.GetWorkflowExecution(ctx, childID)
+	require.NoError(t, err)
+	require.Equal(t, "running", child.Status)
+	require.Equal(t, 0, child.RetryCount)
+	require.Nil(t, child.CompletedAt)
+	require.True(t, child.UpdatedAt.Equal(childBefore.UpdatedAt), "the child must be untouched")
+
+	childExecutionAfter, err := ls.GetExecutionRecord(ctx, childID)
+	require.NoError(t, err)
+	require.Equal(t, "running", childExecutionAfter.Status)
+	require.True(t, childExecutionAfter.UpdatedAt.Equal(childExecutionBefore.UpdatedAt),
+		"the child execution must be untouched")
+}
+
+// TestRetryStaleWorkflowExecutions_ApprovalStatusGuard pins the approval half
+// of the mirrored guard pair: a stale workflow whose approval is still pending
+// must be spared by the retry sweep exactly as the reaper spares it, while a
+// stale workflow whose approval has been decided ('approved') remains a valid
+// retry candidate. Every other fixture in this file has a NULL approval_status
+// and is retried, which already covers the empty-string COALESCE branch.
+func TestRetryStaleWorkflowExecutions_ApprovalStatusGuard(t *testing.T) {
+	ls, ctx := setupRetryTestStorage(t)
+	now := time.Now().UTC()
+	staleAt := now.Add(-2 * time.Hour)
+
+	pending := retryTestWorkflow("exec-retry-approval-pending", staleAt)
+	pending.ApprovalStatus = strPtr("pending")
+	require.NoError(t, ls.StoreWorkflowExecution(ctx, pending))
+
+	approved := retryTestWorkflow("exec-retry-approval-approved", staleAt)
+	approved.ApprovalStatus = strPtr("approved")
+	require.NoError(t, ls.StoreWorkflowExecution(ctx, approved))
+
+	pendingBefore, err := ls.GetWorkflowExecution(ctx, pending.ExecutionID)
+	require.NoError(t, err)
+
+	retried, err := ls.RetryStaleWorkflowExecutions(ctx, 30*time.Minute, 3, 100)
+	require.NoError(t, err)
+	require.Equal(t, []string{approved.ExecutionID}, retried,
+		"only the decided-approval workflow may be retried; the pending one must be spared")
+
+	pendingAfter, err := ls.GetWorkflowExecution(ctx, pending.ExecutionID)
+	require.NoError(t, err)
+	require.Equal(t, "running", pendingAfter.Status)
+	require.Equal(t, 0, pendingAfter.RetryCount)
+	require.Nil(t, pendingAfter.ErrorMessage)
+	require.True(t, pendingAfter.UpdatedAt.Equal(pendingBefore.UpdatedAt),
+		"the approval-pending workflow must keep its committed updated_at")
+
+	approvedAfter, err := ls.GetWorkflowExecution(ctx, approved.ExecutionID)
+	require.NoError(t, err)
+	require.Equal(t, "pending", approvedAfter.Status)
+	require.Equal(t, 1, approvedAfter.RetryCount)
+	require.NotNil(t, approvedAfter.ErrorMessage)
+}
+
+// TestRetryStaleWorkflowExecutions_TerminalChildDoesNotShieldParent pins the
+// boundary of the mirrored child guard: a child that has already reached a
+// terminal state is not live work, so its stale parent must remain a retry
+// candidate. If the guard ever matched children regardless of status, stale
+// parents would be stranded forever with no test catching it.
+func TestRetryStaleWorkflowExecutions_TerminalChildDoesNotShieldParent(t *testing.T) {
+	ls, ctx := setupRetryTestStorage(t)
+	now := time.Now().UTC()
+	staleAt := now.Add(-2 * time.Hour)
+
+	const parentID = "exec-retry-parent-terminal-child"
+	require.NoError(t, ls.StoreWorkflowExecution(ctx, retryTestWorkflow(parentID, staleAt)))
+	require.NoError(t, ls.CreateExecutionRecord(ctx, retryTestExecution(parentID, staleAt)))
+	backdateExecutionUpdatedAt(t, ls, "executions", parentID, staleAt)
+
+	const childID = "exec-retry-terminal-child"
+	childWorkflow := retryTestWorkflow(childID, now)
+	childWorkflow.Status = "succeeded"
+	childWorkflow.ParentExecutionID = strPtr(parentID)
+	require.NoError(t, ls.StoreWorkflowExecution(ctx, childWorkflow))
+
+	retried, err := ls.RetryStaleWorkflowExecutions(ctx, 30*time.Minute, 3, 100)
+	require.NoError(t, err)
+	require.Equal(t, []string{parentID}, retried,
+		"a terminal child is not live work and must not shield its stale parent")
+
+	parent, err := ls.GetWorkflowExecution(ctx, parentID)
+	require.NoError(t, err)
+	require.Equal(t, "pending", parent.Status)
+	require.Equal(t, 1, parent.RetryCount)
+
+	parentExecution, err := ls.GetExecutionRecord(ctx, parentID)
+	require.NoError(t, err)
+	require.Equal(t, "pending", parentExecution.Status)
+
+	child, err := ls.GetWorkflowExecution(ctx, childID)
+	require.NoError(t, err)
+	require.Equal(t, "succeeded", child.Status, "the terminal child must stay terminal")
+}
+
 // TestRetryStaleWorkflowExecutions_BatchReportsOnlyMovedCandidates covers the
 // batch accounting contract: when one sweep selects several stale candidates
 // and only some of them lose their paired execution to a heartbeat between the
