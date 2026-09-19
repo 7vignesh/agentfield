@@ -6,6 +6,41 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.140-rc.1] - 2026-09-19
+
+
+### Chores
+
+- Chore(deps): bump anyio (#1061)
+
+Bumps the uv group with 1 update in the /sdk/python directory: [anyio](https://github.com/agronholm/anyio).
+
+
+Updates `anyio` from 4.13.0 to 4.14.2
+- [Release notes](https://github.com/agronholm/anyio/releases)
+- [Commits](https://github.com/agronholm/anyio/compare/4.13.0...4.14.2)
+
+---
+updated-dependencies:
+- dependency-name: anyio
+  dependency-version: 4.14.2
+  dependency-type: indirect
+  dependency-group: uv
+...
+
+Signed-off-by: dependabot[bot] <support@github.com>
+Co-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com> (4fc037f)
+
+
+
+### Fixed
+
+- Fix(storage): mirror reaper parent/child and approval guards in stale retry (#1062)
+
+* issue/reaper-retry-child-guard: mirror reaper parent/child and approval guards in stale retry
+
+* chore(reaper-retry-child-guard): checkpoint uncommitted issue work (c5407ca)
+
 ## [0.1.139] - 2026-09-18
 
 ## [0.1.139-rc.6] - 2026-09-18
