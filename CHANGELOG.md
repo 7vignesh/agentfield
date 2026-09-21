@@ -6,6 +6,295 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.140-rc.3] - 2026-09-21
+
+
+### Fixed
+
+- Fix(sdk/python): stop the structured log stdout write from blocking the event loop (#1066)
+
+* feat(sdk/python): add a bounded, non-blocking stdout writer for log lines
+
+A single daemon thread drains a bounded FIFO of (stream, line) pairs.
+Deferral only engages where it can help — the caller is on a running event
+loop and the destination has a real file descriptor — so synchronous callers
+and in-memory captures keep writing inline and stay immediately visible.
+
+Under back-pressure the queue discards its oldest pending lines instead of
+blocking the producer, and the writer emits one log.dropped record per
+destination naming the count, so loss is never silent. An atexit drain
+bounded by AGENTFIELD_LOG_QUEUE_FLUSH_SECONDS covers normal shutdown, and an
+at-fork hook gives the child fresh state.
+
+Refs #985
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+* fix(sdk/python): stop the structured log mirror from blocking the event loop
+
+_emit_structured_record printed inline on the calling thread, which in an
+agent node is the event loop, into the _TeeTextIO wrapper over a real pipe.
+A consumer that stops draining that pipe froze the whole loop for the
+duration — heartbeats, in-flight reasoners and the control-plane client
+alike. Size bounding did not help; the stall is the pipe, not the payload.
+
+Both stdout paths now go through the bounded writer, which also keeps their
+relative order. _DynamicStdoutHandler additionally drops its logging handler
+lock: Handler.handle() holds that lock across emit(), so a synchronous
+thread blocked inline on a stalled stdout would otherwise still stall an
+event-loop caller before it reached the queue. The writer serializes instead.
+
+Refs #985
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+* fix(sdk/python): reinitialize the stdio tee locks in a fork child
+
+_TeeTextIO holds its write lock across the blocking write to the original
+stream. A fork while another thread holds it leaves the child with a mutex
+that is locked and has no owner, so every later write in the child deadlocks
+and its stdout is gone for good.
+
+An after_in_child hook now gives each installed tee a fresh lock, clears the
+partial line inherited mid-write, re-creates the ring and follower locks and
+drops the parent's follower queues. There is deliberately no before= hook:
+acquiring those locks ahead of the fork would make fork() itself wait on a
+stalled pipe.
+
+The hazard predates this branch, but a dedicated writer thread that can hold
+the lock for the length of a consumer stall makes it easy to hit.
+
+Refs #985
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+* docs: document the Python SDK log writer queue knobs
+
+AGENTFIELD_LOG_QUEUE, AGENTFIELD_LOG_QUEUE_SIZE and
+AGENTFIELD_LOG_QUEUE_FLUSH_SECONDS, alongside the existing logging
+variables: when deferral engages, the drop-oldest policy and its log.dropped
+marker, that os._exit bypasses the exit flush, and that ordering against a
+caller's own print() is no longer guaranteed.
+
+Refs #985
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+* fix(sdk/python): keep the handler lock override working on Python 3.13
+
+Setting logging.Handler.lock to None relied on handle() calling
+self.acquire(), which skips a falsy lock. Python 3.13 changed handle() to
+`with self.lock:`, so None raises TypeError: 'NoneType' object does not
+support the context manager protocol — every plain log line on 3.13 died in
+the handler, and a test whose synchronous writer thread was killed that way
+hung CI rather than failing.
+
+Use a no-op lock object instead: it satisfies both the acquire/release and
+the context-manager protocols, and keeps the property we want, which is that
+nothing serializes on the handler while the bounded writer already does.
+
+Refs #985
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+* test(sdk/python): make log-writer helper threads daemons
+
+These helpers block on a pipe read or a lock on purpose. As non-daemon
+threads, a failing assertion left them alive and the interpreter waited for
+them at exit, so a test failure presented as a hung CI job instead of a
+failure. As daemons the session reports the failure and exits.
+
+Refs #985
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Opus 5 (1M context) <noreply@anthropic.com> (00c8844)
+
+
+
+### Other
+
+- Document running a Pydantic AI agent inside a reasoner with Logfire (#1065)
+
+* examples(python): Pydantic AI agent inside a reasoner, traced in Logfire
+
+A Pydantic AI Agent runs inside an AgentField reasoner with no adapter, but
+wiring the observability so one Logfire trace covers both the Pydantic AI run
+and the app.ai completion is not obvious. This example does it: logfire.configure()
+once per process, instrument_pydantic_ai() + instrument_litellm() on that provider,
+and instrument_fastapi() on the Agent itself (it is a FastAPI subclass) so the
+inbound reasoner request is the root span.
+
+The AgentField run identifiers ride along as OpenTelemetry baggage, which Logfire
+copies onto every descendant span, so a trace joins back to a run without threading
+anything through either library's API. Pydantic AI's own token usage and cost are
+folded into the per-execution cost tracker so they reach AgentField's usage
+accounting alongside app.ai's.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+* docs: Pydantic AI + Logfire inside an AgentField reasoner
+
+Issue #997 asked for Pydantic AI and Logfire integration. The Logfire half of
+it needs no AgentField code — what was missing is a written-down recipe for the
+combination, and the honest boundary around it.
+
+This documents running a Pydantic AI agent inside a reasoner with one Logfire
+trace per execution covering both the Pydantic AI spans and the app.ai
+completions, correlated to the AgentField run through OpenTelemetry baggage;
+how to fold Pydantic AI's tokens into AgentField's per-execution usage; how the
+recipe differs from AGENTFIELD_LITELLM_CALLBACKS=logfire; and what it does not
+give you — Pydantic AI's durable-execution adapters are not wired into
+AgentField's run DAG, pause/resume or replay.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Opus 5 (1M context) <noreply@anthropic.com> (d310f75)
+
+## [0.1.140-rc.2] - 2026-09-21
+
+
+### Added
+
+- Feat(sdk): port the explicit OpenCode harness config overlay to Go and TypeScript (#1064)
+
+* feat(sdk/go): build an explicit OpenCode config overlay per harness run
+
+The Go OpenCode provider folded the harness system prompt into the positional
+`opencode run` prompt and passed no agent, so a run depended on whatever agent
+and permissions the ambient OpenCode config happened to define. Python moved off
+that in #1023; this brings Go to the same behaviour.
+
+Each run now selects the fixed `agentfield-harness` agent with `--agent` and
+supplies it through OPENCODE_CONFIG_CONTENT: system prompt, model,
+reasoningEffort, mode primary, a fixed steps budget, and a headless permission
+baseline that denies `question`, `task` and the `agentfield*` skills so an
+AgentField-launched worker cannot dispatch back into the control plane.
+
+The overlay is deep-merged into the caller's per-call value, or the ambient one
+when there is no per-call value, so a deployment's mcp servers, plugins,
+providers and other agents survive and the OpenRouter attribution overlay and
+the harness agent coexist. A caller value that is not a JSON object fails the
+run before the concurrency slot is taken and before the child is launched.
+
+AGENTFIELD_OPENCODE_INLINE_SYSTEM_PROMPT restores the inline prompt transport
+and strips the agent's configured prompt, keeping the agent selection and
+permissions, so a caller with a very long system prompt can roll back without
+pinning an older SDK. `tools` and `permission_mode` stay untranslated: with the
+wildcard allow in place a tool mapping would only write allow on top of allow.
+`steps` is a named constant with an AGENTFIELD_OPENCODE_STEPS override and is
+never fed from `max_turns`.
+
+Refs #960
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+* feat(sdk/typescript): build an explicit OpenCode config overlay per harness run
+
+Mirrors the Go and Python OpenCode providers: each run selects the fixed
+`agentfield-harness` agent with `--agent` and defines it through a per-run
+OPENCODE_CONFIG_CONTENT overlay (system prompt, model, reasoningEffort, mode
+primary, fixed steps, and the headless permission baseline that denies
+`question`, `task` and the `agentfield*` skills). The task is the only
+positional prompt.
+
+The overlay is deep-merged into the caller's per-call value or the ambient one,
+so deployment-owned mcp servers, plugins and agents survive and the OpenRouter
+attribution overlay is no longer the only thing that can occupy the variable.
+Object key order is preserved deliberately, with the wildcard first and
+AgentField's denials last, because OpenCode applies the last matching rule.
+A caller value that is not a JSON object throws before runCli is called.
+
+AGENTFIELD_OPENCODE_INLINE_SYSTEM_PROMPT restores the inline prompt transport,
+and `tools` / `permission_mode` remain accepted but untranslated.
+
+This also fixes a key-name bug the overlay would otherwise inherit: the
+provider read `options.system_prompt`, but HarnessRunner forwards HarnessOptions
+verbatim, so a system prompt set through the public TypeScript API arrived as
+`systemPrompt` and never reached opencode at all. It now accepts both spellings,
+as the aforge provider already does.
+
+Refs #960
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+* refactor(sdk/python): make the OpenCode steps budget a named, overridable constant
+
+The OpenCode agent overlay hard-coded `steps: 500` as a bare literal. Give it a
+name and an AGENTFIELD_OPENCODE_STEPS override (per-call environment first, then
+ambient; non-numeric, zero and negative values fall back to the default), so all
+three SDKs expose the same knob. The default is unchanged and `max_turns` is
+still never serialized as `steps`.
+
+Refs #960
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+* docs: describe the OpenCode harness overlay as all-SDK behaviour
+
+The standalone-runs section was written when only Python had the per-run agent
+overlay, and the provider-parity table still said OpenCode receives only the
+model, directory and prompt. Both are now true of Go and TypeScript too.
+
+Also documents AGENTFIELD_OPENCODE_STEPS and states plainly that `tools` and
+`permission_mode` are accepted and ignored, rather than leaving readers to infer
+they are wired to OpenCode permissions.
+
+Refs #960
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+* fix(sdk/go): keep the agentfield* skill denial last in the OpenCode overlay
+
+OpenCode applies the last matching permission rule, so the Python and
+TypeScript providers deliberately emit AgentField's skill/question/task denials
+after any caller rules. Go relied on `encoding/json` sorting map keys, which is
+only accidentally correct: a caller supplying
+
+    {"agent":{"agentfield-harness":{"permission":{"skill":{"agentfield-*":"allow"}}}}}
+
+serialized as {"agentfield*":"deny","agentfield-*":"allow"} — `*` sorts before
+`-` — so the caller's allow was the last match and the recursion guard was off.
+
+Serialize the permission object through a small ordered JSON type instead, in
+the same order Python uses: wildcard, caller rules, then AgentField's denials,
+with `agentfield*` last inside `skill`. Both the merged and the generated-only
+paths now go through it, so one mechanism governs the order.
+
+Also sizes the deep-merge map from the base alone; summing both lengths is what
+CodeQL's allocation-size-overflow rule flags.
+
+The two new tests assert on the serialized JSON rather than a decoded map,
+because a decoded map cannot express order; both fail against the previous
+implementation.
+
+Refs #960
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+* test(sdk/typescript): assert the camelCase harness option keys are ignored too
+
+HarnessRunner forwards HarnessOptions verbatim, so a caller sets
+`permissionMode` and `maxTurns`; the test only passed the snake_case aliases, so
+"tools and permission_mode add nothing to the overlay" was not actually checked
+against the keys the public API sends. Pass both spellings.
+
+Also scopes the Windows stdin sentence in the harness docs: Python and Go send
+the prompt over stdin there, the TypeScript adapter always uses the positional
+argument. That difference is pre-existing and stays out of this change.
+
+Refs #960
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Opus 5 (1M context) <noreply@anthropic.com> (f7bae4b)
+
 ## [0.1.140-rc.1] - 2026-09-19
 
 
