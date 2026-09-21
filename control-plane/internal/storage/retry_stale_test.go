@@ -669,7 +669,9 @@ func TestRetryStaleWorkflowExecutions_TerminalChildDoesNotShieldParent(t *testin
 	backdateExecutionUpdatedAt(t, ls, "executions", parentID, staleAt)
 
 	const childID = "exec-retry-terminal-child"
-	childWorkflow := retryTestWorkflow(childID, now)
+	// The child finished long before the cutoff (staleAt), so it is not live
+	// work and must not shield its stale parent from the retry sweep.
+	childWorkflow := retryTestWorkflow(childID, staleAt)
 	childWorkflow.Status = "succeeded"
 	childWorkflow.ParentExecutionID = strPtr(parentID)
 	require.NoError(t, ls.StoreWorkflowExecution(ctx, childWorkflow))
@@ -677,7 +679,7 @@ func TestRetryStaleWorkflowExecutions_TerminalChildDoesNotShieldParent(t *testin
 	retried, err := ls.RetryStaleWorkflowExecutions(ctx, 30*time.Minute, 3, 100)
 	require.NoError(t, err)
 	require.Equal(t, []string{parentID}, retried,
-		"a terminal child is not live work and must not shield its stale parent")
+		"a long-finished terminal child is not live work and must not shield its stale parent")
 
 	parent, err := ls.GetWorkflowExecution(ctx, parentID)
 	require.NoError(t, err)
@@ -691,6 +693,37 @@ func TestRetryStaleWorkflowExecutions_TerminalChildDoesNotShieldParent(t *testin
 	child, err := ls.GetWorkflowExecution(ctx, childID)
 	require.NoError(t, err)
 	require.Equal(t, "succeeded", child.Status, "the terminal child must stay terminal")
+}
+
+// TestRetryStaleWorkflowExecutions_RecentlyFinishedChildShieldsParent guards
+// the retry half of issue #1059: the retry sweep runs before both reapers when
+// max_retries > 0, so without the recent-terminal-child shield it resets a
+// live parent to pending in the brief window between a child reporting success
+// and the parent posting its own result.
+func TestRetryStaleWorkflowExecutions_RecentlyFinishedChildShieldsParent(t *testing.T) {
+	ls, ctx := setupRetryTestStorage(t)
+	now := time.Now().UTC()
+	staleAt := now.Add(-2 * time.Hour)
+
+	const parentID = "exec-retry-parent-recent-child"
+	require.NoError(t, ls.StoreWorkflowExecution(ctx, retryTestWorkflow(parentID, staleAt)))
+	require.NoError(t, ls.CreateExecutionRecord(ctx, retryTestExecution(parentID, staleAt)))
+	backdateExecutionUpdatedAt(t, ls, "executions", parentID, staleAt)
+
+	const childID = "exec-retry-recent-child"
+	childWorkflow := retryTestWorkflow(childID, now) // just succeeded
+	childWorkflow.Status = "succeeded"
+	childWorkflow.ParentExecutionID = strPtr(parentID)
+	require.NoError(t, ls.StoreWorkflowExecution(ctx, childWorkflow))
+
+	retried, err := ls.RetryStaleWorkflowExecutions(ctx, 30*time.Minute, 3, 100)
+	require.NoError(t, err)
+	require.Empty(t, retried, "parent must not be retried while its child only just finished")
+
+	parent, err := ls.GetWorkflowExecution(ctx, parentID)
+	require.NoError(t, err)
+	require.Equal(t, "running", parent.Status)
+	require.Equal(t, 0, parent.RetryCount)
 }
 
 // TestRetryStaleWorkflowExecutions_BatchReportsOnlyMovedCandidates covers the
