@@ -6,6 +6,155 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.140-rc.3] - 2026-09-21
+
+
+### Fixed
+
+- Fix(sdk/python): stop the structured log stdout write from blocking the event loop (#1066)
+
+* feat(sdk/python): add a bounded, non-blocking stdout writer for log lines
+
+A single daemon thread drains a bounded FIFO of (stream, line) pairs.
+Deferral only engages where it can help — the caller is on a running event
+loop and the destination has a real file descriptor — so synchronous callers
+and in-memory captures keep writing inline and stay immediately visible.
+
+Under back-pressure the queue discards its oldest pending lines instead of
+blocking the producer, and the writer emits one log.dropped record per
+destination naming the count, so loss is never silent. An atexit drain
+bounded by AGENTFIELD_LOG_QUEUE_FLUSH_SECONDS covers normal shutdown, and an
+at-fork hook gives the child fresh state.
+
+Refs #985
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+* fix(sdk/python): stop the structured log mirror from blocking the event loop
+
+_emit_structured_record printed inline on the calling thread, which in an
+agent node is the event loop, into the _TeeTextIO wrapper over a real pipe.
+A consumer that stops draining that pipe froze the whole loop for the
+duration — heartbeats, in-flight reasoners and the control-plane client
+alike. Size bounding did not help; the stall is the pipe, not the payload.
+
+Both stdout paths now go through the bounded writer, which also keeps their
+relative order. _DynamicStdoutHandler additionally drops its logging handler
+lock: Handler.handle() holds that lock across emit(), so a synchronous
+thread blocked inline on a stalled stdout would otherwise still stall an
+event-loop caller before it reached the queue. The writer serializes instead.
+
+Refs #985
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+* fix(sdk/python): reinitialize the stdio tee locks in a fork child
+
+_TeeTextIO holds its write lock across the blocking write to the original
+stream. A fork while another thread holds it leaves the child with a mutex
+that is locked and has no owner, so every later write in the child deadlocks
+and its stdout is gone for good.
+
+An after_in_child hook now gives each installed tee a fresh lock, clears the
+partial line inherited mid-write, re-creates the ring and follower locks and
+drops the parent's follower queues. There is deliberately no before= hook:
+acquiring those locks ahead of the fork would make fork() itself wait on a
+stalled pipe.
+
+The hazard predates this branch, but a dedicated writer thread that can hold
+the lock for the length of a consumer stall makes it easy to hit.
+
+Refs #985
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+* docs: document the Python SDK log writer queue knobs
+
+AGENTFIELD_LOG_QUEUE, AGENTFIELD_LOG_QUEUE_SIZE and
+AGENTFIELD_LOG_QUEUE_FLUSH_SECONDS, alongside the existing logging
+variables: when deferral engages, the drop-oldest policy and its log.dropped
+marker, that os._exit bypasses the exit flush, and that ordering against a
+caller's own print() is no longer guaranteed.
+
+Refs #985
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+* fix(sdk/python): keep the handler lock override working on Python 3.13
+
+Setting logging.Handler.lock to None relied on handle() calling
+self.acquire(), which skips a falsy lock. Python 3.13 changed handle() to
+`with self.lock:`, so None raises TypeError: 'NoneType' object does not
+support the context manager protocol — every plain log line on 3.13 died in
+the handler, and a test whose synchronous writer thread was killed that way
+hung CI rather than failing.
+
+Use a no-op lock object instead: it satisfies both the acquire/release and
+the context-manager protocols, and keeps the property we want, which is that
+nothing serializes on the handler while the bounded writer already does.
+
+Refs #985
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+* test(sdk/python): make log-writer helper threads daemons
+
+These helpers block on a pipe read or a lock on purpose. As non-daemon
+threads, a failing assertion left them alive and the interpreter waited for
+them at exit, so a test failure presented as a hung CI job instead of a
+failure. As daemons the session reports the failure and exits.
+
+Refs #985
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Opus 5 (1M context) <noreply@anthropic.com> (00c8844)
+
+
+
+### Other
+
+- Document running a Pydantic AI agent inside a reasoner with Logfire (#1065)
+
+* examples(python): Pydantic AI agent inside a reasoner, traced in Logfire
+
+A Pydantic AI Agent runs inside an AgentField reasoner with no adapter, but
+wiring the observability so one Logfire trace covers both the Pydantic AI run
+and the app.ai completion is not obvious. This example does it: logfire.configure()
+once per process, instrument_pydantic_ai() + instrument_litellm() on that provider,
+and instrument_fastapi() on the Agent itself (it is a FastAPI subclass) so the
+inbound reasoner request is the root span.
+
+The AgentField run identifiers ride along as OpenTelemetry baggage, which Logfire
+copies onto every descendant span, so a trace joins back to a run without threading
+anything through either library's API. Pydantic AI's own token usage and cost are
+folded into the per-execution cost tracker so they reach AgentField's usage
+accounting alongside app.ai's.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+* docs: Pydantic AI + Logfire inside an AgentField reasoner
+
+Issue #997 asked for Pydantic AI and Logfire integration. The Logfire half of
+it needs no AgentField code — what was missing is a written-down recipe for the
+combination, and the honest boundary around it.
+
+This documents running a Pydantic AI agent inside a reasoner with one Logfire
+trace per execution covering both the Pydantic AI spans and the app.ai
+completions, correlated to the AgentField run through OpenTelemetry baggage;
+how to fold Pydantic AI's tokens into AgentField's per-execution usage; how the
+recipe differs from AGENTFIELD_LITELLM_CALLBACKS=logfire; and what it does not
+give you — Pydantic AI's durable-execution adapters are not wired into
+AgentField's run DAG, pause/resume or replay.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Opus 5 (1M context) <noreply@anthropic.com> (d310f75)
+
 ## [0.1.140-rc.2] - 2026-09-21
 
 
