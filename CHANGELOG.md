@@ -6,6 +6,146 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.140-rc.2] - 2026-09-21
+
+
+### Added
+
+- Feat(sdk): port the explicit OpenCode harness config overlay to Go and TypeScript (#1064)
+
+* feat(sdk/go): build an explicit OpenCode config overlay per harness run
+
+The Go OpenCode provider folded the harness system prompt into the positional
+`opencode run` prompt and passed no agent, so a run depended on whatever agent
+and permissions the ambient OpenCode config happened to define. Python moved off
+that in #1023; this brings Go to the same behaviour.
+
+Each run now selects the fixed `agentfield-harness` agent with `--agent` and
+supplies it through OPENCODE_CONFIG_CONTENT: system prompt, model,
+reasoningEffort, mode primary, a fixed steps budget, and a headless permission
+baseline that denies `question`, `task` and the `agentfield*` skills so an
+AgentField-launched worker cannot dispatch back into the control plane.
+
+The overlay is deep-merged into the caller's per-call value, or the ambient one
+when there is no per-call value, so a deployment's mcp servers, plugins,
+providers and other agents survive and the OpenRouter attribution overlay and
+the harness agent coexist. A caller value that is not a JSON object fails the
+run before the concurrency slot is taken and before the child is launched.
+
+AGENTFIELD_OPENCODE_INLINE_SYSTEM_PROMPT restores the inline prompt transport
+and strips the agent's configured prompt, keeping the agent selection and
+permissions, so a caller with a very long system prompt can roll back without
+pinning an older SDK. `tools` and `permission_mode` stay untranslated: with the
+wildcard allow in place a tool mapping would only write allow on top of allow.
+`steps` is a named constant with an AGENTFIELD_OPENCODE_STEPS override and is
+never fed from `max_turns`.
+
+Refs #960
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+* feat(sdk/typescript): build an explicit OpenCode config overlay per harness run
+
+Mirrors the Go and Python OpenCode providers: each run selects the fixed
+`agentfield-harness` agent with `--agent` and defines it through a per-run
+OPENCODE_CONFIG_CONTENT overlay (system prompt, model, reasoningEffort, mode
+primary, fixed steps, and the headless permission baseline that denies
+`question`, `task` and the `agentfield*` skills). The task is the only
+positional prompt.
+
+The overlay is deep-merged into the caller's per-call value or the ambient one,
+so deployment-owned mcp servers, plugins and agents survive and the OpenRouter
+attribution overlay is no longer the only thing that can occupy the variable.
+Object key order is preserved deliberately, with the wildcard first and
+AgentField's denials last, because OpenCode applies the last matching rule.
+A caller value that is not a JSON object throws before runCli is called.
+
+AGENTFIELD_OPENCODE_INLINE_SYSTEM_PROMPT restores the inline prompt transport,
+and `tools` / `permission_mode` remain accepted but untranslated.
+
+This also fixes a key-name bug the overlay would otherwise inherit: the
+provider read `options.system_prompt`, but HarnessRunner forwards HarnessOptions
+verbatim, so a system prompt set through the public TypeScript API arrived as
+`systemPrompt` and never reached opencode at all. It now accepts both spellings,
+as the aforge provider already does.
+
+Refs #960
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+* refactor(sdk/python): make the OpenCode steps budget a named, overridable constant
+
+The OpenCode agent overlay hard-coded `steps: 500` as a bare literal. Give it a
+name and an AGENTFIELD_OPENCODE_STEPS override (per-call environment first, then
+ambient; non-numeric, zero and negative values fall back to the default), so all
+three SDKs expose the same knob. The default is unchanged and `max_turns` is
+still never serialized as `steps`.
+
+Refs #960
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+* docs: describe the OpenCode harness overlay as all-SDK behaviour
+
+The standalone-runs section was written when only Python had the per-run agent
+overlay, and the provider-parity table still said OpenCode receives only the
+model, directory and prompt. Both are now true of Go and TypeScript too.
+
+Also documents AGENTFIELD_OPENCODE_STEPS and states plainly that `tools` and
+`permission_mode` are accepted and ignored, rather than leaving readers to infer
+they are wired to OpenCode permissions.
+
+Refs #960
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+* fix(sdk/go): keep the agentfield* skill denial last in the OpenCode overlay
+
+OpenCode applies the last matching permission rule, so the Python and
+TypeScript providers deliberately emit AgentField's skill/question/task denials
+after any caller rules. Go relied on `encoding/json` sorting map keys, which is
+only accidentally correct: a caller supplying
+
+    {"agent":{"agentfield-harness":{"permission":{"skill":{"agentfield-*":"allow"}}}}}
+
+serialized as {"agentfield*":"deny","agentfield-*":"allow"} — `*` sorts before
+`-` — so the caller's allow was the last match and the recursion guard was off.
+
+Serialize the permission object through a small ordered JSON type instead, in
+the same order Python uses: wildcard, caller rules, then AgentField's denials,
+with `agentfield*` last inside `skill`. Both the merged and the generated-only
+paths now go through it, so one mechanism governs the order.
+
+Also sizes the deep-merge map from the base alone; summing both lengths is what
+CodeQL's allocation-size-overflow rule flags.
+
+The two new tests assert on the serialized JSON rather than a decoded map,
+because a decoded map cannot express order; both fail against the previous
+implementation.
+
+Refs #960
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+* test(sdk/typescript): assert the camelCase harness option keys are ignored too
+
+HarnessRunner forwards HarnessOptions verbatim, so a caller sets
+`permissionMode` and `maxTurns`; the test only passed the snake_case aliases, so
+"tools and permission_mode add nothing to the overlay" was not actually checked
+against the keys the public API sends. Pass both spellings.
+
+Also scopes the Windows stdin sentence in the harness docs: Python and Go send
+the prompt over stdin there, the TypeScript adapter always uses the positional
+argument. That difference is pre-existing and stays out of this change.
+
+Refs #960
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Opus 5 (1M context) <noreply@anthropic.com> (f7bae4b)
+
 ## [0.1.140-rc.1] - 2026-09-19
 
 
