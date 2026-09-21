@@ -1205,6 +1205,14 @@ func (ls *LocalStorage) markStaleExecutions(ctx context.Context, staleAfter time
 	tsExpr := ls.staleTimestampExpr("COALESCE(updated_at, created_at, started_at)")
 	executionUpdateTSExpr := ls.staleTimestampExpr("COALESCE(e.updated_at, e.created_at, e.started_at)")
 	cutoffExpr := ls.staleTimestampExpr("?")
+	// A child that reached a terminal state after the cutoff also shields its
+	// parent. When a child finishes, the parent needs a brief window (~50-600ms)
+	// to receive the result and post its own status; the parent's own updated_at
+	// does not move while it waits. Without this the reaper can time the parent
+	// out in that window, and the parent's real success callback then gets a 409.
+	// A child that finished long before the cutoff no longer shields the parent,
+	// so a genuinely stuck parent is still reaped (see issue #1059).
+	childRecencyTSExpr := ls.staleTimestampExpr("COALESCE(c.completed_at, c.updated_at)")
 	rows, err := db.QueryContext(ctx, `
 		SELECT execution_id, started_at
 		FROM executions e
@@ -1213,10 +1221,13 @@ func (ls *LocalStorage) markStaleExecutions(ctx context.Context, staleAfter time
 		  AND NOT EXISTS (
 		      SELECT 1 FROM executions c
 		      WHERE c.parent_execution_id = e.execution_id
-		        AND c.status IN ('running', 'pending', 'queued')
+		        AND (
+		            c.status IN ('running', 'pending', 'queued')
+		            OR (c.status != 'timeout' AND `+childRecencyTSExpr+` > `+cutoffExpr+`)
+		        )
 		  )
 		ORDER BY `+tsExpr+` ASC
-		LIMIT ?`, cutoff, limit)
+		LIMIT ?`, cutoff, cutoff, limit)
 	if err != nil {
 		return 0, fmt.Errorf("query stale executions: %w", err)
 	}
@@ -1264,7 +1275,10 @@ func (ls *LocalStorage) markStaleExecutions(ctx context.Context, staleAfter time
 		  AND NOT EXISTS (
 		      SELECT 1 FROM executions c
 		      WHERE c.parent_execution_id = e.execution_id
-		        AND c.status IN ('running', 'pending', 'queued')
+		        AND (
+		            c.status IN ('running', 'pending', 'queued')
+		            OR (c.status != 'timeout' AND `+childRecencyTSExpr+` > `+cutoffExpr+`)
+		        )
 		  )`)
 	if err != nil {
 		return 0, fmt.Errorf("prepare stale execution update: %w", err)
@@ -1293,6 +1307,7 @@ func (ls *LocalStorage) markStaleExecutions(ctx context.Context, staleAfter time
 			durationMS,
 			now,
 			rec.id,
+			cutoff,
 			cutoff,
 		)
 		if err != nil {
@@ -1341,6 +1356,12 @@ func (ls *LocalStorage) markStaleWorkflowExecutions(ctx context.Context, staleAf
 	workflowTSExpr := ls.staleTimestampExpr("COALESCE(w.updated_at, w.created_at, w.started_at)")
 	executionTSExpr := ls.staleTimestampExpr("COALESCE(e.updated_at, e.created_at, e.started_at)")
 	cutoffExpr := ls.staleTimestampExpr("?")
+	// A child workflow that reached a terminal state after the cutoff also
+	// shields its parent, covering the brief window between a child reporting
+	// success and the parent posting its own result (see issue #1059). A child
+	// that finished long before the cutoff no longer shields the parent, so a
+	// genuinely stuck parent workflow is still reaped.
+	childRecencyTSExpr := ls.staleTimestampExpr("COALESCE(c.completed_at, c.updated_at)")
 	// The legacy reaper runs first and makes its row terminal while updating
 	// updated_at. Terminal rows must not shield their still-active workflow row
 	// from this reaper, or the two tables could remain out of sync forever.
@@ -1357,10 +1378,13 @@ func (ls *LocalStorage) markStaleWorkflowExecutions(ctx context.Context, staleAf
 		  AND NOT EXISTS (
 		      SELECT 1 FROM workflow_executions c
 		      WHERE c.parent_execution_id = w.execution_id
-		        AND c.status IN ('running', 'pending', 'queued', 'waiting')
+		        AND (
+		            c.status IN ('running', 'pending', 'queued', 'waiting')
+		            OR (c.status != 'timeout' AND `+childRecencyTSExpr+` > `+cutoffExpr+`)
+		        )
 		  )
 		ORDER BY `+workflowTSExpr+` ASC
-		LIMIT ?`, cutoff, cutoff, limit)
+		LIMIT ?`, cutoff, cutoff, cutoff, limit)
 	if err != nil {
 		return 0, fmt.Errorf("query stale workflow executions: %w", err)
 	}
@@ -1422,7 +1446,10 @@ func (ls *LocalStorage) markStaleWorkflowExecutions(ctx context.Context, staleAf
 		  AND NOT EXISTS (
 		      SELECT 1 FROM workflow_executions c
 		      WHERE c.parent_execution_id = w.execution_id
-		        AND c.status IN ('running', 'pending', 'queued', 'waiting')
+		        AND (
+		            c.status IN ('running', 'pending', 'queued', 'waiting')
+		            OR (c.status != 'timeout' AND `+childRecencyTSExpr+` > `+cutoffExpr+`)
+		        )
 		  )`)
 	if err != nil {
 		return 0, fmt.Errorf("prepare stale workflow execution update: %w", err)
@@ -1461,6 +1488,7 @@ func (ls *LocalStorage) markStaleWorkflowExecutions(ctx context.Context, staleAf
 			durationMS,
 			now,
 			rec.id,
+			cutoff,
 			cutoff,
 			cutoff,
 		)

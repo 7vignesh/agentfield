@@ -96,10 +96,10 @@ func TestMarkStaleExecutions_UnwindsChainBottomUp(t *testing.T) {
 	require.Equal(t, "timeout", executionStatus(t, ls, "exec-build"))
 }
 
-// TestMarkStaleExecutions_TerminalChildDoesNotShieldParent: only a
-// *non-terminal* child protects a parent. A finished child must not keep a
-// genuinely stuck parent alive.
-func TestMarkStaleExecutions_TerminalChildDoesNotShieldParent(t *testing.T) {
+// TestMarkStaleExecutions_LongFinishedChildDoesNotShieldParent: a child that
+// reached a terminal state *before* the cutoff no longer protects a genuinely
+// stuck parent, so orphan cleanup keeps working (issue #1059 acceptance).
+func TestMarkStaleExecutions_LongFinishedChildDoesNotShieldParent(t *testing.T) {
 	ls, ctx := setupTestLocalStorage(t)
 	now := time.Now().UTC()
 
@@ -115,12 +115,73 @@ func TestMarkStaleExecutions_TerminalChildDoesNotShieldParent(t *testing.T) {
 		ParentExecutionID: strPtr("exec-build"),
 	}
 	require.NoError(t, ls.CreateExecutionRecord(ctx, done))
+	// The child finished an hour ago — well before the 30-minute cutoff — so it
+	// must not shield the stuck parent. CreateExecutionRecord stamps updated_at
+	// at "now", so backdate it to make the completion genuinely old.
+	backdateExecutionUpdatedAt(t, ls, "executions", "exec-done", now.Add(-time.Hour))
 
 	reaped, err := ls.MarkStaleExecutions(ctx, 30*time.Minute, 100)
 	require.NoError(t, err)
 	require.Equal(t, 1, reaped)
 	require.Equal(t, "timeout", executionStatus(t, ls, "exec-build"))
 	require.Equal(t, "succeeded", executionStatus(t, ls, "exec-done"), "terminal child untouched")
+}
+
+// TestMarkStaleExecutions_RecentlyFinishedChildShieldsParent guards issue #1059:
+// a child that reached a terminal state *after* the cutoff protects its parent
+// during the brief window between the child reporting success and the parent
+// posting its own result. Without this the parent is timed out mid-flight and
+// its real success callback is rejected with HTTP 409.
+func TestMarkStaleExecutions_RecentlyFinishedChildShieldsParent(t *testing.T) {
+	ls, ctx := setupTestLocalStorage(t)
+	now := time.Now().UTC()
+
+	// Parent is stale by its own clock (idle 1h while it waited on the child).
+	newRunningExecution(t, ls, "exec-build", "", time.Hour)
+	// Child just succeeded (updated_at ~= now, well after the 30-minute cutoff).
+	done := &types.Execution{
+		ExecutionID:       "exec-done",
+		RunID:             "run-parented",
+		AgentNodeID:       "agent-1",
+		ReasonerID:        "reasoner-1",
+		NodeID:            "node-1",
+		Status:            "succeeded",
+		StartedAt:         now.Add(-2 * time.Hour),
+		ParentExecutionID: strPtr("exec-build"),
+	}
+	require.NoError(t, ls.CreateExecutionRecord(ctx, done))
+
+	reaped, err := ls.MarkStaleExecutions(ctx, 30*time.Minute, 100)
+	require.NoError(t, err)
+	require.Equal(t, 0, reaped, "parent must survive while its child only just finished")
+	require.Equal(t, "running", executionStatus(t, ls, "exec-build"))
+}
+
+// TestMarkStaleExecutions_TimeoutChildDoesNotShieldParent: a child the reaper
+// itself timed out must not shield its parent, even though its timeout is
+// recent — otherwise a reaped leaf would keep its stuck ancestor alive and the
+// bottom-up unwind (one level per sweep) would stall.
+func TestMarkStaleExecutions_TimeoutChildDoesNotShieldParent(t *testing.T) {
+	ls, ctx := setupTestLocalStorage(t)
+	now := time.Now().UTC()
+
+	newRunningExecution(t, ls, "exec-build", "", time.Hour)
+	timedOut := &types.Execution{
+		ExecutionID:       "exec-timeout",
+		RunID:             "run-parented",
+		AgentNodeID:       "agent-1",
+		ReasonerID:        "reasoner-1",
+		NodeID:            "node-1",
+		Status:            "timeout",
+		StartedAt:         now.Add(-2 * time.Hour),
+		ParentExecutionID: strPtr("exec-build"),
+	}
+	require.NoError(t, ls.CreateExecutionRecord(ctx, timedOut))
+
+	reaped, err := ls.MarkStaleExecutions(ctx, 30*time.Minute, 100)
+	require.NoError(t, err)
+	require.Equal(t, 1, reaped)
+	require.Equal(t, "timeout", executionStatus(t, ls, "exec-build"))
 }
 
 // TestMarkStaleExecutions_UnrelatedStuckExecutionStillReaped: the new skip is
@@ -138,4 +199,58 @@ func TestMarkStaleExecutions_UnrelatedStuckExecutionStillReaped(t *testing.T) {
 	require.Equal(t, 1, reaped)
 	require.Equal(t, "timeout", executionStatus(t, ls, "exec-orphan"))
 	require.Equal(t, "running", executionStatus(t, ls, "exec-build"))
+}
+
+// workflowStatus returns the current status of a workflow_executions row.
+func workflowStatus(t *testing.T, ls *LocalStorage, id string) string {
+	t.Helper()
+	wf, err := ls.GetWorkflowExecution(t.Context(), id)
+	require.NoError(t, err)
+	return wf.Status
+}
+
+// TestMarkStaleWorkflowExecutions_RecentlyFinishedChildShieldsParent is the
+// workflow-table half of the issue #1059 fix: a parent workflow that is stale
+// by its own clock must not be reaped while a child workflow only just reached
+// a terminal state, so the parent's own success callback is not rejected 409.
+func TestMarkStaleWorkflowExecutions_RecentlyFinishedChildShieldsParent(t *testing.T) {
+	ls, ctx := setupTestLocalStorage(t)
+	now := time.Now().UTC()
+	staleAt := now.Add(-2 * time.Hour)
+
+	const parentID = "wf-parent-recent-child"
+	require.NoError(t, ls.StoreWorkflowExecution(ctx, retryTestWorkflow(parentID, staleAt)))
+
+	child := retryTestWorkflow("wf-child-recent", now) // updated_at ~= now
+	child.Status = "succeeded"
+	child.ParentExecutionID = strPtr(parentID)
+	require.NoError(t, ls.StoreWorkflowExecution(ctx, child))
+
+	reaped, err := ls.MarkStaleWorkflowExecutions(ctx, 30*time.Minute, 100)
+	require.NoError(t, err)
+	require.Equal(t, 0, reaped, "parent workflow must survive while its child only just finished")
+	require.Equal(t, "running", workflowStatus(t, ls, parentID))
+}
+
+// TestMarkStaleWorkflowExecutions_LongFinishedChildDoesNotShieldParent: a child
+// workflow that finished well before the cutoff no longer shields a genuinely
+// stuck parent, preserving orphan cleanup (issue #1059 acceptance).
+func TestMarkStaleWorkflowExecutions_LongFinishedChildDoesNotShieldParent(t *testing.T) {
+	ls, ctx := setupTestLocalStorage(t)
+	now := time.Now().UTC()
+	staleAt := now.Add(-2 * time.Hour)
+
+	const parentID = "wf-parent-old-child"
+	require.NoError(t, ls.StoreWorkflowExecution(ctx, retryTestWorkflow(parentID, staleAt)))
+
+	child := retryTestWorkflow("wf-child-old", staleAt) // finished long ago
+	child.Status = "succeeded"
+	child.ParentExecutionID = strPtr(parentID)
+	require.NoError(t, ls.StoreWorkflowExecution(ctx, child))
+
+	reaped, err := ls.MarkStaleWorkflowExecutions(ctx, 30*time.Minute, 100)
+	require.NoError(t, err)
+	require.Equal(t, 1, reaped)
+	require.Equal(t, "timeout", workflowStatus(t, ls, parentID))
+	require.Equal(t, "succeeded", workflowStatus(t, ls, "wf-child-old"), "terminal child untouched")
 }
