@@ -31,6 +31,23 @@ func (ls *LocalStorage) staleTimestampExpr(col string) string {
 	return "julianday(" + col + ")"
 }
 
+// childTerminalRecencyExpr returns an expression for "the later of a child's
+// control-plane record time (updated_at) and its agent-reported completion
+// time (completed_at)". completed_at is stored verbatim from the agent, so on a
+// skewed agent clock or a callback that took a while to land it can already be
+// older than the cutoff at the moment the control plane writes the terminal row
+// (issue #1059 review). updated_at is the control plane's own write clock, so
+// taking the maximum shields the parent whenever EITHER clock says the child
+// finished after the cutoff. On the executions table a terminal row's
+// updated_at is frozen (terminal->terminal is rejected), so this cannot shield
+// indefinitely.
+func (ls *LocalStorage) childTerminalRecencyExpr() string {
+	if ls.requireSQLDB().Mode() == "postgres" {
+		return "GREATEST(COALESCE(c.completed_at, c.updated_at), COALESCE(c.updated_at, c.completed_at))"
+	}
+	return "MAX(julianday(COALESCE(c.completed_at, c.updated_at)), julianday(COALESCE(c.updated_at, c.completed_at)))"
+}
+
 // maxNodesForDepthCalc caps the number of executions for which we compute DAG depth to avoid heavy queries.
 const maxNodesForDepthCalc = 1000
 
@@ -1180,11 +1197,17 @@ func parseTimeString(value string) (time.Time, error) {
 // non-terminal child are skipped. A parent's own updated_at stops moving while
 // it waits, so without this a long child call — one agent doing many minutes of
 // work in a single request — reaps its whole ancestor chain even though real
-// work is happening. Deliberately no recency test on the child: the chain
-// unwinds bottom-up instead. If work genuinely stops, the leaf goes stale and
-// is reaped first, which makes its parent childless and eligible on the next
-// sweep, and so on up. Nothing is stuck forever; it just takes one sweep per
-// level.
+// work is happening.
+//
+// A child that reached a terminal state after the cutoff also shields its parent
+// for one stale window, covering the brief gap between a child reporting success
+// and the parent posting its own result (issue #1059). timeout children are
+// excluded from this so the reaper's own kills cannot perpetuate a shield.
+// Consequence: a non-timeout child that just finished delays its parent's reap
+// by up to one stale window, so the bottom-up chain unwind can take a stale
+// window per level rather than a single sweep. Nothing is stuck forever — a
+// child that finished before the cutoff no longer shields, so the chain always
+// drains.
 // The conditional UPDATE re-evaluates the staleness predicates so a row that
 // gains activity after selection is left alone.
 func (ls *LocalStorage) MarkStaleExecutions(ctx context.Context, staleAfter time.Duration, limit int) (int, error) {
@@ -1212,7 +1235,7 @@ func (ls *LocalStorage) markStaleExecutions(ctx context.Context, staleAfter time
 	// out in that window, and the parent's real success callback then gets a 409.
 	// A child that finished long before the cutoff no longer shields the parent,
 	// so a genuinely stuck parent is still reaped (see issue #1059).
-	childRecencyTSExpr := ls.staleTimestampExpr("COALESCE(c.completed_at, c.updated_at)")
+	childRecencyTSExpr := ls.childTerminalRecencyExpr()
 	rows, err := db.QueryContext(ctx, `
 		SELECT execution_id, started_at
 		FROM executions e
@@ -1361,7 +1384,7 @@ func (ls *LocalStorage) markStaleWorkflowExecutions(ctx context.Context, staleAf
 	// success and the parent posting its own result (see issue #1059). A child
 	// that finished long before the cutoff no longer shields the parent, so a
 	// genuinely stuck parent workflow is still reaped.
-	childRecencyTSExpr := ls.staleTimestampExpr("COALESCE(c.completed_at, c.updated_at)")
+	childRecencyTSExpr := ls.childTerminalRecencyExpr()
 	// The legacy reaper runs first and makes its row terminal while updating
 	// updated_at. Terminal rows must not shield their still-active workflow row
 	// from this reaper, or the two tables could remain out of sync forever.
@@ -1622,6 +1645,13 @@ func (ls *LocalStorage) retryStaleWorkflowExecutions(ctx context.Context, staleA
 	workflowTSExpr := ls.staleTimestampExpr("COALESCE(w.updated_at, w.created_at, w.started_at)")
 	executionTSExpr := ls.staleTimestampExpr("COALESCE(e.updated_at, e.created_at, e.started_at)")
 	cutoffExpr := ls.staleTimestampExpr("?")
+	// A child that reached a terminal state after the cutoff shields its parent
+	// for one stale window, covering the gap between a child reporting success
+	// and the parent posting its own result. Without this the retry sweep — which
+	// runs before both reapers when max_retries > 0 — resets a live parent to
+	// pending mid-flight (issue #1059). timeout children are excluded so the
+	// reaper's own kills cannot perpetuate a shield.
+	childRecencyTSExpr := ls.childTerminalRecencyExpr()
 
 	rows, err := db.QueryContext(ctx, `
 		SELECT w.execution_id
@@ -1637,10 +1667,13 @@ func (ls *LocalStorage) retryStaleWorkflowExecutions(ctx context.Context, staleA
 		  AND NOT EXISTS (
 		      SELECT 1 FROM workflow_executions c
 		      WHERE c.parent_execution_id = w.execution_id
-		        AND c.status IN ('running', 'pending', 'queued', 'waiting')
+		        AND (
+		            c.status IN ('running', 'pending', 'queued', 'waiting')
+		            OR (c.status != 'timeout' AND `+childRecencyTSExpr+` > `+cutoffExpr+`)
+		        )
 		  )
 		ORDER BY `+workflowTSExpr+` ASC
-		LIMIT ?`, maxRetries, cutoff, cutoff, limit)
+		LIMIT ?`, maxRetries, cutoff, cutoff, cutoff, limit)
 	if err != nil {
 		return nil, fmt.Errorf("query retriable workflow executions: %w", err)
 	}
@@ -1705,7 +1738,10 @@ func (ls *LocalStorage) retryStaleWorkflowExecutions(ctx context.Context, staleA
 		  AND NOT EXISTS (
 		      SELECT 1 FROM workflow_executions c
 		      WHERE c.parent_execution_id = w.execution_id
-		        AND c.status IN ('running', 'pending', 'queued', 'waiting')
+		        AND (
+		            c.status IN ('running', 'pending', 'queued', 'waiting')
+		            OR (c.status != 'timeout' AND `+childRecencyTSExpr+` > `+cutoffExpr+`)
+		        )
 		  )`)
 	if err != nil {
 		return nil, fmt.Errorf("prepare retry statement: %w", err)
@@ -1745,7 +1781,7 @@ func (ls *LocalStorage) retryStaleWorkflowExecutions(ctx context.Context, staleA
 			return retried, fmt.Errorf("savepoint for retry candidate %s: %w", id, err)
 		}
 
-		result, err := workflowStmt.ExecContext(ctx, retryReason, now, id, maxRetries, cutoff, cutoff)
+		result, err := workflowStmt.ExecContext(ctx, retryReason, now, id, maxRetries, cutoff, cutoff, cutoff)
 		if err != nil {
 			return retried, fmt.Errorf("retry workflow execution %s: %w", id, err)
 		}

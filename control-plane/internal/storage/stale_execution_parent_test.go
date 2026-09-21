@@ -254,3 +254,39 @@ func TestMarkStaleWorkflowExecutions_LongFinishedChildDoesNotShieldParent(t *tes
 	require.Equal(t, "timeout", workflowStatus(t, ls, parentID))
 	require.Equal(t, "succeeded", workflowStatus(t, ls, "wf-child-old"), "terminal child untouched")
 }
+
+// TestMarkStaleExecutions_LateChildCallbackStillShieldsParent covers the review
+// finding on #1063: completed_at is the agent's clock (stored verbatim), so a
+// skewed agent clock or a callback that took a while to land can make
+// completed_at older than the cutoff at the instant the control plane writes
+// the terminal row. The shield reads the later of completed_at and updated_at
+// (the control plane's own write clock), so the parent is still protected.
+func TestMarkStaleExecutions_LateChildCallbackStillShieldsParent(t *testing.T) {
+	ls, ctx := setupTestLocalStorage(t)
+	now := time.Now().UTC()
+
+	newRunningExecution(t, ls, "exec-parent", "", time.Hour)
+	done := &types.Execution{
+		ExecutionID:       "exec-child",
+		RunID:             "run-parented",
+		AgentNodeID:       "agent-1",
+		ReasonerID:        "reasoner-1",
+		NodeID:            "node-1",
+		Status:            "succeeded",
+		StartedAt:         now.Add(-2 * time.Hour),
+		ParentExecutionID: strPtr("exec-parent"),
+	}
+	require.NoError(t, ls.CreateExecutionRecord(ctx, done))
+
+	// Child reports it finished 45 min ago (skewed agent clock, or a callback
+	// that was stuck); the control plane only wrote the terminal row just now.
+	_, err := ls.requireSQLDB().Exec(
+		"UPDATE executions SET completed_at = ?, updated_at = ? WHERE execution_id = ?",
+		now.Add(-45*time.Minute), now, "exec-child")
+	require.NoError(t, err)
+
+	reaped, err := ls.MarkStaleExecutions(ctx, 30*time.Minute, 100)
+	require.NoError(t, err)
+	require.Equal(t, 0, reaped, "a late-landing child callback (recent updated_at) must still shield the parent")
+	require.Equal(t, "running", executionStatus(t, ls, "exec-parent"))
+}
