@@ -6,6 +6,90 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.140-rc.5] - 2026-09-21
+
+
+### Other
+
+- Report admitted async executions as queued until the control plane dispatches them (#1067)
+
+* fix(control-plane): report async executions as queued until dispatch
+
+An admitted async execution answered 202 with status "queued" but was
+persisted as "running" before a pool worker had picked it up, so
+GET /api/v1/executions/{id} disagreed with the body the caller had just
+been handed and reported work as running while it sat in the queue.
+
+Persist the async lane as queued at admission and flip to running in the
+worker, immediately before the agent call. The flip is a conditional
+read-modify-write: it only acts on a row that is still queued, so it
+cannot clobber a cancel or pause that won the race, and it leaves the
+restart lane (already running) alone. It counts as transitioned only when
+the write came back persisted, so a storage failure does not emit
+execution.started or fake a running plan. The worker also stops before
+dispatching anything that reached a terminal status while it waited.
+
+execution.started now fires at dispatch rather than at admission, and
+admission emits an execution.updated event carrying the queued status so
+event consumers still learn about the new run.
+
+queued gains the destinations a running row has, because the workflow
+projection flip is best-effort and a row still marked queued must be able
+to reach every state its dispatched counterpart could — otherwise a
+partial flip strands it. Migration 036 teaches the Postgres
+workflow_executions CHECK about queued; executions already allowed it.
+
+Admission itself is unchanged: the queue stays bounded and over-capacity
+requests still get 503 + Retry-After with nothing persisted.
+
+Refs #986
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+
+* fix(control-plane): keep queued executions pausable and on the dashboard
+
+Two consumers assumed a just-admitted async execution was already
+running. Pause hardcoded running as its only source status, so pausing a
+run that had not been dispatched yet now returned 409; the enhanced
+dashboard built its active-run list from running and waiting records
+only, so an admitted run vanished from the dashboard until a worker
+picked it up.
+
+Accept queued as a pausable source — the worker already waits for resume
+before dispatching a paused execution, so pausing before dispatch just
+means the agent is not called until resume — and include queued in the
+dashboard's active-run query.
+
+Refs #986
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+
+* docs: describe the async queued -> running lifecycle
+
+Say plainly that the 202 body and GET both report queued until a worker
+dispatches, that queued is non-terminal so callers poll through it, and
+that the queue is bounded rather than an unbounded backlog.
+
+Refs #986
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+
+* test(control-plane): cover the dispatch-time races on a queued execution
+
+The dispatch loop's post-transition branches had no coverage: an
+execution that reached a terminal status between the worker's read and
+its update, and one that was paused in that same window (both when the
+resume wait fails and when it succeeds and the loop retries). Also cover
+the error path of the dashboard's new queued-execution query.
+
+Refs #986
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5.1 <noreply@anthropic.com> (b30dd2f)
+
 ## [0.1.140-rc.4] - 2026-09-21
 
 
