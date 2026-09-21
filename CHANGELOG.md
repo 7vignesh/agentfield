@@ -6,6 +6,82 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.140-rc.4] - 2026-09-21
+
+
+### Fixed
+
+- Fix(control-plane): don't reap a parent whose child just finished (#1059) (#1063)
+
+* fix(control-plane): don't reap a parent whose child just finished
+
+Closes #1059. The stale reaper could time out a running parent in the
+brief window (~50-600ms) between its child reaching a terminal state and
+the parent posting its own result. The parent's own updated_at does not
+move while it waits on the child, and the existing guard only skipped a
+parent while it had a non-terminal child. The moment the child posted
+succeeded, the guard vanished and nothing refreshed the parent's clock,
+so the reaper could mark the parent (and its workflow) timeout, and the
+parent's real success callback was then rejected with HTTP 409.
+
+Fix (issue's Option 1, query-contained): in MarkStaleExecutions and
+MarkStaleWorkflowExecutions, also skip a parent when a child reached a
+terminal state after the cutoff (COALESCE(c.completed_at, c.updated_at)
+> cutoff). A child that finished long before the cutoff no longer
+shields the parent, so genuinely stuck parents are still reaped and
+orphan cleanup keeps working.
+
+Timeout children are excluded from the shield (c.status != 'timeout'):
+the reaper's own kills set a recent completed_at/updated_at, and letting
+them shield would stall the bottom-up chain unwind. Applied to both the
+candidate SELECT and the re-evaluating UPDATE in each function.
+
+Tests: recently-finished child shields the parent; long-finished child
+does not; reaper-timeout child does not; bottom-up unwind preserved.
+Same cases for MarkStaleWorkflowExecutions.
+
+PR #1046 protected a workflow whose own clock advances; this covers the
+distinct case where the parent's clock never advances while it waits.
+
+Note: RetryStaleWorkflowExecutions has the same guard shape and race; I
+kept this PR to the two functions the issue names and can extend to the
+retry path in a follow-up if desired.
+
+* fix(control-plane): address #1063 review — CP-clock shield, retry path, docs
+
+Review by @AbirAbbas on #1063 surfaced three things:
+
+1. completed_at is the agent's clock (UpdateExecutionStatusHandler stores
+   req.CompletedAt verbatim), while the reaper cutoff is the control
+   plane's time.Now(). A skewed agent clock or a late-landing callback
+   could make completed_at older than the cutoff at the instant the CP
+   wrote the terminal row, so the shield expired before it was installed
+   and the parent was reaped anyway (the original 409). The shield now
+   reads the LATER of completed_at and updated_at via a new
+   childTerminalRecencyExpr (GREATEST on postgres, MAX(julianday(...))
+   on sqlite): updated_at is the CP's own write clock, so either clock
+   being after the cutoff protects the parent. On the executions table a
+   terminal row's updated_at is frozen (terminal->terminal is rejected),
+   so this cannot shield indefinitely. Adds Abbas's deterministic
+   TestMarkStaleExecutions_LateChildCallbackStillShieldsParent.
+
+2. RetryStaleWorkflowExecutions runs before both reapers when
+   max_retries > 0 and carried the identical guard, so the same race
+   reset a live parent to pending mid-flight. Applied the same
+   recent-terminal-child shield to its SELECT and re-evaluating UPDATE,
+   backdated TestRetryStaleWorkflowExecutions_TerminalChildDoesNotShieldParent
+   to the long-finished case, and added
+   TestRetryStaleWorkflowExecutions_RecentlyFinishedChildShieldsParent.
+
+3. Rewrote the stale MarkStaleExecutions doc comment: it claimed there
+   was no child recency test and the chain unwound one sweep per level;
+   both are now wrong. It documents the recency shield, the timeout-child
+   exclusion, and that unwinding can take a stale window per level.
+
+---------
+
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com> (2f41660)
+
 ## [0.1.140-rc.3] - 2026-09-21
 
 
