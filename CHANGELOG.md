@@ -6,6 +6,141 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.140-rc.6] - 2026-09-21
+
+
+### Other
+
+- Hand a run interrupted by a rollout to a restart, and let the original execution id follow it (#1068)
+
+* feat(control-plane): persist a forward restart pointer on executions
+
+Restarts always mint a new execution id, so a consumer polling the id it
+originally received has no way to discover that the work continued
+somewhere else. Record the successor on the source row instead.
+
+Adds restarted_as_execution_id to executions and workflow_executions
+(migration 036, mirrored in the SQLite models so AutoMigrate picks it up),
+a SetExecutionRestartedAs writer, and the execution-filter predicates the
+resume sweep needs: updated_at bounds, terminal-only, root-only and
+status-reason matching.
+
+Also defines the agent_shutdown_cancelled status reason and the
+cross-SDK "cancelled during graceful shutdown" literal it keys off, so a
+reasoner cancelled by a draining pod stops being indistinguishable from a
+user cancel.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+
+* feat(control-plane): expose restarted_as and classify drain cancels
+
+Splits the restart mechanics out of the gin handler into startRestart so
+the same path can be driven without an HTTP request, keeping the endpoint's
+status codes, headers, body and queue-full behaviour byte-identical.
+
+Every restart now stamps the forward pointer on the source execution and
+on the run root it restarted, and mirrors it into the source run's
+lineage metadata. GET /executions/{id} returns it as restarted_as, but
+only once the successor actually resolves, so a consumer is never handed
+a pointer into a run that has since been cleaned up. A healthy execution
+costs no extra query.
+
+A terminal cancelled callback carrying the SDK graceful-shutdown error is
+stored as agent_shutdown_cancelled. The SDK's fire-and-forget lifecycle
+event stream is the path that actually terminalizes a drain-cancelled
+orchestrator in practice, so it classifies identically.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+
+* feat(control-plane): opt-in handoff of runs interrupted by a rollout
+
+A rolling deploy that kills a long-running orchestrator leaves its run
+terminally dead; the only recovery is the caller re-submitting. With
+AGENTFIELD_RESUME_INTERRUPTED_RUNS=true the control plane does that
+itself: an interrupted run root is handed to the existing workflow-scope
+restart with reuse all-succeeded, so children that already succeeded are
+replayed rather than dispatched again, and the dead execution is stamped
+with the forward pointer.
+
+Interruption means agent_restart_orphaned, control_plane_shutdown or
+agent_shutdown_cancelled — nothing else is ever resumed. Any of the three
+can terminalize a run, so the handoff is triggered from the orphan reap,
+the status callback, the lifecycle-event stream, and a bounded sweep at
+startup for the case where the control plane itself restarted.
+
+Bounded on purpose: run roots only, never an execution that already has a
+successor, chain depth capped by _MAX_ATTEMPTS, startup capped by _LIMIT
+and _WINDOW, and no storage query at all when disabled. Inline handoffs
+are scheduled after _DELAY on a detached context with every guard
+re-evaluated against a freshly read record, so the replacement pod has
+registered before the successor is dispatched and two triggers for the
+same root still produce one successor.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+
+* fix(control-plane): stop the orphan reap from claiming post-replacement work
+
+An execution created while the old pod is gone and the replacement has
+not yet registered is stamped with the departing instance id, and the
+deferred reap then fails it. Measured end to end: the handoff's successor
+ran to completion on the new pod while the control plane had already
+marked it agent_restart_orphaned.
+
+The reap now carries the instant the replacement registered and skips any
+row created at or after it — work created after a replacement announces
+itself cannot belong to the process that left. A zero cutoff behaves
+exactly as before, so existing callers are unaffected. Wall-clock based
+and therefore approximate under control-plane clock skew; the
+stale-execution sweep remains the backstop.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+
+* fix(sdk/go): report the cross-SDK graceful-shutdown cancellation contract
+
+The Python and TypeScript SDKs both report a reasoner cancelled by their
+own graceful shutdown as status cancelled with the error "cancelled
+during graceful shutdown". The Go SDK reported status failed with the raw
+"context canceled", so a Go agent's drain looked like an ordinary failure
+and the control plane could not tell it apart from a real error.
+
+Only a cancellation caused by the agent's own shutdown is remapped; a
+caller cancellation or a timeout keeps its current behaviour.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+
+* docs: restarted_as, the new status reason, and the handoff's real bounds
+
+Documents the forward pointer on execution reads, the
+agent_shutdown_cancelled status reason, and the five
+AGENTFIELD_RESUME_INTERRUPTED_* knobs, in the same tables the existing
+drain and reap settings live in.
+
+Says plainly that the orchestrator re-executes from its first line —
+there is no snapshot of interpreter state — and that what makes the
+restart cheap is replaying the already-succeeded app.call children.
+
+Adds a Limitations section rather than overselling: single control plane,
+one attempt per interruption, stale-sweep timeouts are not resumed, the
+startup sweep is one bounded page per boot, the attempt counter is
+best-effort metadata, and the reap cutoff is wall-clock based.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+
+* test(control-plane): cover the restart and handoff branches the patch gate flagged
+
+Covers the config-merge branches for the new resume settings, the restart
+endpoint's validation and load-failure paths, and the handoff's guards:
+each interruption reason and a rejected one, lineage attempt resolution
+when the store cannot read run metadata or the metadata is absent or
+malformed, and the early returns when the feature is off or the restart
+itself fails.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Fable 5.1 <noreply@anthropic.com> (ee7d65d)
+
 ## [0.1.140-rc.5] - 2026-09-21
 
 
