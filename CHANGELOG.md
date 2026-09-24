@@ -6,6 +6,39 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.141-rc.2] - 2026-09-24
+
+
+### Added
+
+- Feat(sdk/typescript): add harness provider preflight (#1069)
+
+* feat(sdk/typescript): add harness provider preflight
+
+* fix(sdk/typescript): probe harness doctor versions via the resolved binary
+
+harnessDoctor passed the bare provider name to the version probe while
+findExecutable had already resolved a PATHEXT-qualified path. On Windows
+the bare name misses npm shims (ENOENT) and spawning a resolved .cmd/.bat
+without a shell is rejected by Node (EINVAL, CVE-2024-27980), so shim-based
+providers like codex always reported version_probe_failed and usable=false.
+
+Probe the resolved absolute path instead, and route Windows batch shims
+through cmd.exe /d /s /c with the outer-quote form so paths with spaces
+survive. POSIX behavior is unchanged: the same file that findExecutable
+verified is executed directly. The VersionProbe contract now documents
+that command[0] is the resolved path.
+
+* fix(sdk/typescript): pass options.env to harness doctor binary resolution
+
+harnessDoctor resolved binaries against process.env even when callers
+supplied HarnessDoctorOptions.env, so a report could mix installation
+state from the process environment with authentication state from the
+custom one. Binary discovery (PATH lookup and Windows PATHEXT matching)
+now uses the same env as the offline auth signal.
+
+Addresses PR #1069 review feedback. (5b0bf9b)
+
 ## [0.1.141-rc.1] - 2026-09-24
 
 
