@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.141-rc.1] - 2026-09-24
+
+
+### Testing
+
+- Test(sdk/go): cover verifier constraint and request branches (#1071) (0ef73eb)
+
 ## [0.1.140] - 2026-09-21
 
 ## [0.1.140-rc.6] - 2026-09-21
