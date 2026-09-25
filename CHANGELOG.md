@@ -6,6 +6,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.141-rc.3] - 2026-09-25
+
+
+### Fixed
+
+- Fix(sdk/python): skip schema output dir for schema-free harness runs (#1072)
+
+HarnessRunner.run() allocated the per-run .agentfield-out-* directory
+before dispatching the provider even when schema is None. That directory
+only ever holds .agentfield_output.json (#684, #891), and every consumer
+of it is already inside an `if schema is not None` guard, so a text-only
+run paid a filesystem write it never read back. When the project root
+could not accept one — a read-only mount, an immutable CI workspace — a
+plain permission_mode="plan" call failed during setup, before the coding
+agent was invoked at all.
+
+Allocate the directory only for schema-bearing runs. Their per-run
+isolation and cleanup are unchanged, so concurrent runs sharing one cwd
+still cannot overwrite or delete each other's output.
+
+Refs #684, #891 (8805c96)
+
 ## [0.1.141-rc.2] - 2026-09-24
 
 
