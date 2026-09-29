@@ -6,6 +6,65 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.141-rc.7] - 2026-09-29
+
+
+### Fixed
+
+- Fix(sdk): probe harness binaries as argv, not a cmd.exe command string (#1075)
+
+* fix(sdk): probe harness binaries as argv, not cmd.exe /c
+
+CodeQL alerts 60, 61, and 62 flag defaultVersionProbe for building a
+cmd.exe /c command line from a resolved binary path. Pass that path as
+an execFile argv element instead. PATHEXT resolution is unchanged.
+
+Assisted-by: CodeAF (grok-4.7)
+Co-Authored-By: CodeAF <267109073+agentfield-bot@users.noreply.github.com>
+
+* fix(sdk): run Windows batch probes as separate cmd.exe argv
+
+Node rejects execFile of a .cmd or .bat (CVE-2024-27980). Keep cmd.exe
+as the interpreter for those shims only, and pass /d, /s, /c, the
+resolved path, and the version args as separate argv elements.
+
+Assisted-by: CodeAF (grok-4.7)
+Co-Authored-By: CodeAF <267109073+agentfield-bot@users.noreply.github.com>
+
+* fix(sdk): drop cmd /s from the Windows batch version probe
+
+Node quotes an argv element that contains spaces. cmd /s then strips the
+outer quotes of the whole line and splits C:\Program Files\.... Pass
+/d /c and the resolved path as separate argv elements, with no /s and
+no joined command string.
+
+Assisted-by: CodeAF (grok-4.7)
+Co-Authored-By: CodeAF <267109073+agentfield-bot@users.noreply.github.com>
+
+* fix(sdk): pass Windows batch probe paths through the child env
+
+The argv form (cmd.exe /d /c <path> --version, no /s) let cmd.exe
+re-parse the path: a directory named `x) & echo PWNED (y` ran the
+injected command, and `&`, `^`, `;,=` paths failed the probe. The
+original /s form was safe from injection but expanded %VAR% in paths.
+
+The /c line is now a fixed template of quoted %AGENTFIELD_PROBE_ARG_N%
+references, with the path and args set in the child's environment.
+cmd.exe expands each variable once after splitting the line, so every
+metacharacter stays literal, and no path data reaches the command
+string that CodeQL tracks. /v:off keeps `!` literal.
+
+Verified on real cmd.exe (Windows 11, Node 22) across 10 hostile shim
+directories: all return the version, none injects.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: CodeAF <267109073+agentfield-bot@users.noreply.github.com>
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com>
+Co-authored-by: Claude Opus 5.5 (1M context) <noreply@anthropic.com> (bf11859)
+
 ## [0.1.141-rc.6] - 2026-09-29
 
 
