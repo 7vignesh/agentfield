@@ -6,6 +6,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.141-rc.6] - 2026-09-29
+
+
+### Chores
+
+- Chore(deps): bump ip-address (#1076)
+
+Bumps the npm_and_yarn group with 1 update in the /sdk/typescript directory: [ip-address](https://github.com/beaugunderson/ip-address).
+
+
+Updates `ip-address` from 10.4.0 to 10.7.2
+- [Release notes](https://github.com/beaugunderson/ip-address/releases)
+- [Commits](https://github.com/beaugunderson/ip-address/compare/v10.4.0...v10.7.2)
+
+---
+updated-dependencies:
+- dependency-name: ip-address
+  dependency-version: 10.7.2
+  dependency-type: indirect
+  dependency-group: npm_and_yarn
+...
+
+Signed-off-by: dependabot[bot] <support@github.com>
+Co-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com> (5be6276)
+
 ## [0.1.141-rc.5] - 2026-09-26
 
 
