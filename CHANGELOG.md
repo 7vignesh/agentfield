@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.142-rc.4] - 2026-10-01
+
+
+### Fixed
+
+- Fix(sdk/go): stop retrying execution status callbacks on non-retryable 4xx (#1081) (4a87b1c)
+
 ## [0.1.142-rc.3] - 2026-10-01
 
 
