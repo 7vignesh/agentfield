@@ -6,6 +6,51 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.142-rc.2] - 2026-10-01
+
+
+### Fixed
+
+- Fix(sdk/python): keep rate limiter jitter off the global random state (#1078)
+
+_calculate_backoff_delay called random.seed(self._container_seed + attempt)
+before drawing jitter, which reseeds the module-level generator shared by the
+whole host process. Every rate-limit retry therefore reset the application's
+random stream to a value derived from HOSTNAME and the pid, so all later
+random.random()/choice()/shuffle()/sample() calls in the process returned a
+repeatable sequence instead of continuing the stream the caller seeded.
+
+It also degraded the SDK's own jitter: rate_limiter.py is the only module that
+seeds the global generator, but client.py:1295 (_next_poll_interval) and
+harness/_runner.py:415 and :423 (transient-error backoff) draw from it, so one
+rate-limited LLM call made their poll intervals and backoff delays a
+deterministic function of the container seed -- identical across containers
+that share a hostname/pid shape, which is exactly the synchronisation jitter
+exists to prevent.
+
+Draw from a private random.Random instance instead. The returned jitter is
+bit-identical (verified across 240 seed/attempt/range combinations by
+comparing float.hex()), because CPython's module-level random.uniform
+delegates to a module-level Random seeded through the same path. Backoff
+timing, retry counts, and per-container jitter distribution are unchanged;
+the seed just stops leaking into global state, which also stops concurrent
+callers from drawing jitter off a seed another caller installed.
+
+This matches what the Go and TypeScript SDKs already do: sdk/go/ai/
+rate_limiter.go:321 uses rand.New(rand.NewSource(containerSeed + attempt)) and
+sdk/typescript/src/ai/RateLimiter.ts:172 uses a local _createJitterRng closure,
+both with the same seeding scheme and the same (u*2-1)*r formula that
+random.uniform(-r, r) expands to.
+
+The existing test_calculate_backoff_applies_jitter_and_max_cap already computes
+its expectation with random.Random(container_seed + attempt) and compares only
+the returned number, which is why this survived: nothing asserted on the global
+state. Adds two tests pinning the contract at both the helper and the public
+execute_with_retry path.
+
+enable_rate_limit_retry defaults to True (types.py:497) and agent_ai.py:605-609
+re-forces it, so the affected path is the default one. (b675e2d)
+
 ## [0.1.142-rc.1] - 2026-10-01
 
 
