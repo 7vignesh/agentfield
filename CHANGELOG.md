@@ -6,6 +6,40 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.142-rc.7] - 2026-10-01
+
+
+### Chores
+
+- Chore(deps): bump the uv group across 1 directory with 2 updates (#1085)
+
+Bumps the uv group with 2 updates in the /sdk/python directory: [litellm](https://github.com/BerriAI/litellm) and [urllib3](https://github.com/urllib3/urllib3).
+
+
+Updates `litellm` from 1.87.0 to 1.88.6
+- [Release notes](https://github.com/BerriAI/litellm/releases)
+- [Commits](https://github.com/BerriAI/litellm/compare/v1.87.0...v1.88.6)
+
+Updates `urllib3` from 2.7.0 to 2.8.0
+- [Release notes](https://github.com/urllib3/urllib3/releases)
+- [Changelog](https://github.com/urllib3/urllib3/blob/main/CHANGES.rst)
+- [Commits](https://github.com/urllib3/urllib3/compare/2.7.0...2.8.0)
+
+---
+updated-dependencies:
+- dependency-name: litellm
+  dependency-version: 1.88.6
+  dependency-type: direct:production
+  dependency-group: uv
+- dependency-name: urllib3
+  dependency-version: 2.8.0
+  dependency-type: indirect
+  dependency-group: uv
+...
+
+Signed-off-by: dependabot[bot] <support@github.com>
+Co-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com> (c41e4a5)
+
 ## [0.1.142-rc.6] - 2026-10-01
 
 
