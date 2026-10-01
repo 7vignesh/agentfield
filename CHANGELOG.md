@@ -6,6 +6,41 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.142-rc.5] - 2026-10-01
+
+
+### Chores
+
+- Chore(deps): bump the npm_and_yarn group across 2 directories with 2 updates (#1084)
+
+Bumps the npm_and_yarn group with 1 update in the /desktop directory: [electron](https://github.com/electron/electron).
+Bumps the npm_and_yarn group with 1 update in the /sdk/typescript directory: [axios](https://github.com/axios/axios).
+
+
+Updates `electron` from 42.9.1 to 42.10.0
+- [Release notes](https://github.com/electron/electron/releases)
+- [Commits](https://github.com/electron/electron/compare/v42.9.1...v42.10.0)
+
+Updates `axios` from 1.18.0 to 1.20.0
+- [Release notes](https://github.com/axios/axios/releases)
+- [Changelog](https://github.com/axios/axios/blob/v1.x/CHANGELOG.md)
+- [Commits](https://github.com/axios/axios/compare/v1.18.0...v1.20.0)
+
+---
+updated-dependencies:
+- dependency-name: electron
+  dependency-version: 42.10.0
+  dependency-type: direct:development
+  dependency-group: npm_and_yarn
+- dependency-name: axios
+  dependency-version: 1.20.0
+  dependency-type: direct:production
+  dependency-group: npm_and_yarn
+...
+
+Signed-off-by: dependabot[bot] <support@github.com>
+Co-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com> (484bddf)
+
 ## [0.1.142-rc.4] - 2026-10-01
 
 
