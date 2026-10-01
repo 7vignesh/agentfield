@@ -6,6 +6,51 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.142-rc.3] - 2026-10-01
+
+
+### Fixed
+
+- Fix(control-plane): return 404 for status callbacks on unknown executions (#1080) (e447e0b)
+
+- Fix(sdk/python): parse AGENTFIELD_ASYNC boolean flags with the repo's env vocabulary (#1082)
+
+AsyncConfig.from_environment() read all five boolean feature flags with
+`lambda x: x.lower() == "true"`. Four of those fields default to True, so the
+only values that could be expressed were "true" and "false": setting
+AGENTFIELD_ASYNC_ENABLE_RESULT_CACHING=1 -- or =yes, or =on -- evaluated to
+False and silently disabled result caching, the opposite of what the value says.
+The same inversion applied to enable_async_execution, enable_batch_polling and
+fallback_to_sync, and it reaches users by default because both Agent (agent.py:846)
+and AgentFieldClient (client.py:182) build their async_config from
+from_environment() when none is passed.
+
+The lambda also never raises, so get_env_var's `except (ValueError, TypeError):
+return default_value` fallback is unreachable for booleans and an unparseable
+value overrides the field with False instead of leaving the default. PR #714,
+which wired this into the client default, documents the intended contract:
+from_environment() "only overrides fields when the corresponding env var is set
+(falling back to the default on unparseable values)".
+
+Use the vocabulary the package already uses, split by the field's default:
+default-on flags opt out with ("0", "false", "no", "off") like
+log_writer._queue_enabled, logger._stdout_mirror_enabled, node_logs.logs_enabled
+and openrouter_attribution.attribution_enabled; the default-off enable_event_stream
+opts in with ("1", "true", "yes", "on") like litellm_observability._TRUE_VALUES.
+A value outside the vocabulary now leaves the field at its default, which is what
+makes the documented fallback hold without the converter having to raise.
+
+With no AGENTFIELD_ASYNC_* variable set the converters are never reached --
+get_env_var returns the default before consulting them -- so from_environment()
+produces a byte-identical AsyncConfig to before (verified by digesting every
+field on both trees). Only explicit opt-in/opt-out values change behaviour, and
+every value that already worked still does: "true"/"false"/"0" are unchanged,
+while "1"/"yes"/"on"/whitespace-padded values now mean what they say.
+
+logger.py's three AGENTFIELD_LOG_* flags use the same `== "true"` shape but all
+default to False, so they fail in the less harmful direction; left alone here to
+keep this to one seam. (e960677)
+
 ## [0.1.142-rc.2] - 2026-10-01
 
 
