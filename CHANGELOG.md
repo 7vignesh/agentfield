@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.142-rc.6] - 2026-10-01
+
+
+### Fixed
+
+- Fix(events): cache non-duplicate status events so A→B→A flips are not dropped (#1079) (5df7496)
+
 ## [0.1.142-rc.5] - 2026-10-01
 
 
