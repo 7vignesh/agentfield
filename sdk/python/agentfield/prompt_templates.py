@@ -125,7 +125,7 @@ class PromptTemplates(BaseModel):
         ),
     )
 
-    def __deepcopy__(self, memo: Dict[int, Any]) -> "PromptTemplates":
+    def __deepcopy__(self, memo: Optional[Dict[int, Any]] = None) -> "PromptTemplates":
         # AIConfig is deep-copied on every ai() call. A formatter that is a
         # bound method on an object holding a lock or client cannot be pickled,
         # so a naive deepcopy raises "cannot pickle '_thread.lock'". The fields
