@@ -13,6 +13,7 @@ if TYPE_CHECKING:
 import requests
 from agentfield.agent_utils import AgentUtils
 from agentfield.logger import log_debug, log_error, log_warn
+from agentfield.prompt_templates import PromptTemplates
 from agentfield.rate_limiter import StatelessRateLimiter
 from httpx import HTTPStatusError
 from pydantic import BaseModel, ValidationError
@@ -601,6 +602,13 @@ class AgentAI:
         # Apply hierarchical configuration: Agent defaults < Method overrides < Runtime overrides
         final_config = self.agent.ai_config.copy(deep=True)
 
+        # Resolve prompt templates with a default fallback. The real AIConfig
+        # always has this field, but test doubles and partial custom configs
+        # may not, so never assume it is present.
+        prompt_templates = getattr(final_config, "prompt_templates", None)
+        if prompt_templates is None:
+            prompt_templates = PromptTemplates()
+
         # Default enable rate limit retry unless explicitly set to False
         if (
             not hasattr(final_config, "enable_rate_limit_retry")
@@ -641,7 +649,7 @@ class AgentAI:
             # The schema instruction is overridable via prompt_templates. A
             # None template drops the instruction entirely; the native
             # response_format (set further down) is still sent.
-            schema_instruction = final_config.prompt_templates.render_schema_instruction(
+            schema_instruction = prompt_templates.render_schema_instruction(
                 schema_json
             )
             # Merge with any user-provided system prompt
@@ -854,12 +862,12 @@ class AgentAI:
 
             # Carry the agent's prompt templates into the loop so overrides to
             # tool-message framing (and the opt-in tool system prompt) apply.
-            tool_config.prompt_templates = final_config.prompt_templates
+            tool_config.prompt_templates = prompt_templates
 
             # tool_system_prompt defaults to None (nothing injected), so
             # existing tools= calls are unchanged. When set, append it after
             # the user's system prompt, the same way schema_instruction is.
-            tool_system_prompt = final_config.prompt_templates.tool_system_prompt
+            tool_system_prompt = prompt_templates.tool_system_prompt
             if tool_system_prompt:
                 system_message = next(
                     (m for m in messages if m.get("role") == "system"), None
