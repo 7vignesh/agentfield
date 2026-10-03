@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.142-rc.8] - 2026-10-03
+
+
+### Testing
+
+- Test(sdk): verify Windows batch probe end-to-end and harden cmd.exe branch
+
+Batch probe hardening (split call sites, quote/control-char guard, corrected parsing comment) plus real Windows E2E verification of the env-template probe. Spark suite 1029 passed via SSH; windows-latest harness-doctor job passed.
+
+Assisted-by: CodeAF (mimo-v2.6-pro)
+
+Co-Authored-By: CodeAF <267109073+agentfield-bot@users.noreply.github.com> (d6f19d4)
+
 ## [0.1.142-rc.7] - 2026-10-01
 
 
