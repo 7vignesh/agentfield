@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.142-rc.9] - 2026-10-05
+
+
+### Other
+
+- Telemetry updates (752cc57)
+
 ## [0.1.142-rc.8] - 2026-10-03
 
 
