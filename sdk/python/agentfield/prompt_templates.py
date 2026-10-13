@@ -15,7 +15,7 @@ import json
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 # The schema-adherence instruction appended to the system message when a
 # Pydantic output schema is in effect. ``{schema}`` is replaced (via
@@ -53,8 +53,11 @@ def default_tool_error_formatter(tool_name: str, error: str) -> Dict[str, Any]:
 def default_tool_result_formatter(tool_name: str, result: Any) -> Any:
     """Default framing for a successful tool call: the raw result, unframed.
 
-    The loop JSON-encodes the return value with ``default=str``, matching the
-    prior ``json.dumps(result, default=str)`` behavior.
+    This returns the result unchanged; ``format_tool_result`` JSON-encodes it
+    with ``default=str`` to reproduce the prior ``json.dumps(result,
+    default=str)`` behavior exactly, including for a bare string result (which
+    stays JSON-quoted). A *custom* formatter may instead return a string to be
+    sent verbatim.
     """
     return result
 
@@ -78,8 +81,11 @@ class PromptTemplates(BaseModel):
 
     # exclude=True on the callables keeps ai_config.model_dump_json() working
     # after a formatter is set; arbitrary_types_allowed lets Callable fields
-    # hold plain functions and bound methods.
-    model_config = ConfigDict(arbitrary_types_allowed=True)
+    # hold plain functions and bound methods; validate_assignment makes the
+    # None/empty normalization below fire on direct mutation too.
+    model_config = ConfigDict(
+        arbitrary_types_allowed=True, validate_assignment=True
+    )
 
     schema_instruction: Optional[str] = Field(
         default=DEFAULT_SCHEMA_INSTRUCTION,
@@ -133,6 +139,29 @@ class PromptTemplates(BaseModel):
         # safe (callables are shared by reference, which is what we want).
         return self.model_copy()
 
+    # The tool-loop fields always run (every tool call must get a message
+    # back), so None or empty on them means "use the built-in default" rather
+    # than "omit". validate_assignment below makes this hold for direct
+    # mutation (templates.tool_call_limit_reached = None), not just
+    # construction. schema_instruction and tool_system_prompt are deliberately
+    # NOT normalized here: None on them means "omit the text".
+    @field_validator("tool_call_limit_reached", mode="before")
+    @classmethod
+    def _default_limit(cls, value: Any) -> str:
+        if value is None or value == "":
+            return DEFAULT_TOOL_CALL_LIMIT_REACHED
+        return value
+
+    @field_validator("tool_error_formatter", mode="before")
+    @classmethod
+    def _default_error_formatter(cls, value: Any) -> Any:
+        return default_tool_error_formatter if value is None else value
+
+    @field_validator("tool_result_formatter", mode="before")
+    @classmethod
+    def _default_result_formatter(cls, value: Any) -> Any:
+        return default_tool_result_formatter if value is None else value
+
     def render_schema_instruction(self, schema_json: str) -> Optional[str]:
         """Return the schema instruction with ``{schema}`` filled, or None.
 
@@ -145,12 +174,30 @@ class PromptTemplates(BaseModel):
         return self.schema_instruction.replace("{schema}", schema_json)
 
     def format_tool_error(self, tool_name: str, error: str) -> str:
-        """Serialize a tool error into tool-message content."""
-        return _encode_tool_content(self.tool_error_formatter(tool_name, error))
+        """Serialize a tool error into tool-message content.
+
+        The default formatter returns a dict, which is JSON-encoded,
+        reproducing the prior ``json.dumps({"error": ..., "tool": ...})``. A
+        custom formatter may return a string to send verbatim.
+        """
+        value = self.tool_error_formatter(tool_name, error)
+        if self.tool_error_formatter is default_tool_error_formatter:
+            # Preserve the exact historical encoding regardless of value type.
+            return json.dumps(value)
+        return _encode_tool_content(value)
 
     def format_tool_result(self, tool_name: str, result: Any) -> str:
-        """Serialize a tool result into tool-message content."""
-        return _encode_tool_content(self.tool_result_formatter(tool_name, result))
+        """Serialize a tool result into tool-message content.
+
+        With the default formatter this reproduces the prior
+        ``json.dumps(result, default=str)`` exactly, so a bare string result
+        stays JSON-quoted. A custom formatter may return a string to send
+        verbatim.
+        """
+        value = self.tool_result_formatter(tool_name, result)
+        if self.tool_result_formatter is default_tool_result_formatter:
+            return json.dumps(value, default=str)
+        return _encode_tool_content(value)
 
 
 def _encode_tool_content(value: Any) -> str:

@@ -29,6 +29,8 @@ from agentfield.prompt_templates import (
     TRACE_SOURCE_TOOL_ERROR,
     TRACE_SOURCE_TOOL_LIMIT,
     TRACE_SOURCE_TOOL_RESULT,
+    TRACE_SOURCE_TOOL_SYSTEM_PROMPT,
+    TRACE_SOURCE_USER,
     PromptTemplates,
     TracedMessage,
 )
@@ -436,6 +438,21 @@ async def execute_tool_call_loop(
     total_calls = 0
     hydrated = not needs_lazy_hydration
     _timeout_break = False
+
+    # Tag the messages the caller/ai() assembled before the loop. A system
+    # message is SDK-injected here (schema instruction and/or tool system
+    # prompt, assembled in AI.ai()); every other initial message is user
+    # content.
+    for initial_message in messages:
+        role = initial_message.get("role")
+        source = (
+            TRACE_SOURCE_TOOL_SYSTEM_PROMPT
+            if role == "system"
+            else TRACE_SOURCE_USER
+        )
+        trace.messages.append(
+            TracedMessage(message=initial_message, source=source)
+        )
 
     for turn in range(config.max_turns):
         trace.total_turns = turn + 1

@@ -360,3 +360,102 @@ async def test_trace_tags_tool_error_source():
     )
 
     assert TRACE_SOURCE_TOOL_ERROR in [m.source for m in trace.messages]
+
+
+# --- Review #1092: default encoding byte-for-byte and None/empty normalization
+
+
+def test_default_string_result_stays_json_quoted():
+    # Historical behavior: json.dumps(result, default=str), so a bare string
+    # result is sent JSON-quoted, not verbatim.
+    templates = PromptTemplates()
+    assert templates.format_tool_result("t", "hello") == json.dumps("hello")
+    assert templates.format_tool_result("t", 'say "hi"') == json.dumps('say "hi"')
+    assert templates.format_tool_result("t", 'a\nb') == json.dumps('a\nb')
+    assert templates.format_tool_result("t", {"a": 1}) == json.dumps({"a": 1})
+
+
+def test_custom_result_formatter_string_is_verbatim():
+    templates = PromptTemplates(tool_result_formatter=lambda tool, result: "VERBATIM")
+    assert templates.format_tool_result("t", {"a": 1}) == "VERBATIM"
+
+
+def test_default_error_encoding_escapes_quotes():
+    templates = PromptTemplates()
+    content = templates.format_tool_error("t", 'bad "quote"')
+    assert json.loads(content) == {"error": 'bad "quote"', "tool": "t"}
+
+
+def test_none_and_empty_normalize_on_construction():
+    from agentfield.prompt_templates import (
+        DEFAULT_TOOL_CALL_LIMIT_REACHED,
+        default_tool_error_formatter,
+        default_tool_result_formatter,
+    )
+
+    t = PromptTemplates(
+        tool_call_limit_reached=None,
+        tool_error_formatter=None,
+        tool_result_formatter=None,
+    )
+    assert t.tool_call_limit_reached == DEFAULT_TOOL_CALL_LIMIT_REACHED
+    assert t.tool_error_formatter is default_tool_error_formatter
+    assert t.tool_result_formatter is default_tool_result_formatter
+    assert (
+        PromptTemplates(tool_call_limit_reached="").tool_call_limit_reached
+        == DEFAULT_TOOL_CALL_LIMIT_REACHED
+    )
+
+
+def test_none_and_empty_normalize_on_mutation():
+    from agentfield.prompt_templates import DEFAULT_TOOL_CALL_LIMIT_REACHED
+
+    t = PromptTemplates()
+    t.tool_call_limit_reached = ""
+    assert t.tool_call_limit_reached == DEFAULT_TOOL_CALL_LIMIT_REACHED
+    t.tool_call_limit_reached = None
+    assert t.tool_call_limit_reached == DEFAULT_TOOL_CALL_LIMIT_REACHED
+    t.tool_error_formatter = None
+    assert json.loads(t.format_tool_error("tool", "boom")) == {
+        "error": "boom",
+        "tool": "tool",
+    }
+
+
+@pytest.mark.asyncio
+async def test_trace_tags_user_and_system_messages():
+    from agentfield.prompt_templates import (
+        TRACE_SOURCE_TOOL_SYSTEM_PROMPT,
+        TRACE_SOURCE_USER,
+    )
+
+    agent = make_mock_agent()
+    agent.call = AsyncMock(return_value={"ok": True})
+    messages = [
+        {"role": "system", "content": "You are a tool user."},
+        {"role": "user", "content": "go"},
+    ]
+    tools = capabilities_to_tool_schemas([make_reasoner()])
+    responses = iter(
+        [
+            make_llm_response(tool_calls=[make_tool_call()]),
+            make_llm_response(content="done"),
+        ]
+    )
+
+    async def mock_completion(_params):
+        return next(responses)
+
+    _, trace = await execute_tool_call_loop(
+        agent=agent,
+        messages=messages,
+        tools=tools,
+        config=ToolCallConfig(max_turns=5),
+        needs_lazy_hydration=False,
+        litellm_params={"model": "openai/gpt-4"},
+        make_completion=mock_completion,
+    )
+
+    sources = [m.source for m in trace.messages]
+    assert TRACE_SOURCE_TOOL_SYSTEM_PROMPT in sources
+    assert TRACE_SOURCE_USER in sources
