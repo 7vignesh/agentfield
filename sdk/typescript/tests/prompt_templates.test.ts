@@ -5,12 +5,13 @@ import {
   defaultToolErrorFormatter,
   defaultToolResultFormatter,
   DEFAULT_TOOL_CALL_LIMIT_REACHED,
+  TRACE_SOURCE_USER,
   TRACE_SOURCE_ASSISTANT,
   TRACE_SOURCE_TOOL_RESULT,
   TRACE_SOURCE_TOOL_ERROR,
   TRACE_SOURCE_TOOL_SYSTEM_PROMPT,
 } from '../src/ai/PromptTemplates.js';
-import { executeToolCallLoop } from '../src/ai/ToolCalling.js';
+import { executeToolCallLoop, buildToolConfig } from '../src/ai/ToolCalling.js';
 
 const { generateTextMock } = vi.hoisted(() => ({
   generateTextMock: vi.fn(),
@@ -213,7 +214,7 @@ describe('executeToolCallLoop with promptTemplates', () => {
     expect(sources).toContain(TRACE_SOURCE_TOOL_ERROR);
   });
 
-  it('leaves trace.messages undefined-safe when nothing is injected', async () => {
+  it('always tags the user prompt and final assistant message', async () => {
     const agent = { call: vi.fn().mockResolvedValue({ ok: true }) } as any;
 
     generateTextMock.mockReset();
@@ -230,8 +231,28 @@ describe('executeToolCallLoop with promptTemplates', () => {
       () => ({ provider: 'mock' })
     );
 
-    // No tools executed and no tool system prompt, so messages stays empty.
-    expect(result.trace.messages ?? []).toEqual([]);
-    void TRACE_SOURCE_ASSISTANT;
+    // Even with no tool calls, the user prompt and the model's final text are
+    // captured with their provenance (review #1092).
+    expect(result.trace.messages).toEqual([
+      { message: { role: 'user', content: 'prompt' }, source: TRACE_SOURCE_USER },
+      { message: { role: 'assistant', content: 'done' }, source: TRACE_SOURCE_ASSISTANT }
+    ]);
+  });
+});
+
+describe('buildToolConfig config detection', () => {
+  it('treats a promptTemplates-only object as a ToolCallConfig and discovers', async () => {
+    const agent = {
+      discover: vi.fn().mockResolvedValue({ agents: [] })
+    } as any;
+
+    const { config } = await buildToolConfig(
+      { promptTemplates: { toolCallLimitReached: 'stop' } } as any,
+      agent
+    );
+
+    // Recognized as a config (discovery ran), not misread as a raw tool map.
+    expect(agent.discover).toHaveBeenCalled();
+    expect(config.promptTemplates).toEqual({ toolCallLimitReached: 'stop' });
   });
 });

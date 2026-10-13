@@ -22,6 +22,8 @@ import {
   type ResolvedPromptTemplates,
   type TracedMessage,
   resolvePromptTemplates,
+  TRACE_SOURCE_USER,
+  TRACE_SOURCE_ASSISTANT,
   TRACE_SOURCE_TOOL_ERROR,
   TRACE_SOURCE_TOOL_LIMIT,
   TRACE_SOURCE_TOOL_RESULT,
@@ -317,7 +319,8 @@ async function hydrateSelectedTools(
 
 function isToolCallConfig(obj: any): obj is ToolCallConfig {
   const keys = ['maxTurns', 'maxToolCalls', 'tags', 'schemaHydration', 'agentIds',
-                'healthStatus', 'fallbackBroadening', 'maxCandidateTools', 'maxHydratedTools'];
+                'healthStatus', 'fallbackBroadening', 'maxCandidateTools', 'maxHydratedTools',
+                'promptTemplates'];
   return typeof obj === 'object' && !Array.isArray(obj) && keys.some(k => k in obj);
 }
 
@@ -416,7 +419,7 @@ function wrapToolsWithObservability(
           trace.calls.push(record);
           const limitContent = { error: templates.toolCallLimitReached };
           (trace.messages ??= []).push({
-            message: limitContent,
+            message: { role: 'tool', toolName: name, content: limitContent },
             source: TRACE_SOURCE_TOOL_LIMIT
           });
           return limitContent;
@@ -439,7 +442,7 @@ function wrapToolsWithObservability(
           trace.calls.push(record);
           const resultContent = templates.toolResultFormatter(name, result);
           (trace.messages ??= []).push({
-            message: resultContent,
+            message: { role: 'tool', toolName: name, content: resultContent },
             source: TRACE_SOURCE_TOOL_RESULT
           });
           return resultContent;
@@ -450,7 +453,7 @@ function wrapToolsWithObservability(
           trace.calls.push(record);
           const errorContent = templates.toolErrorFormatter(name, message);
           (trace.messages ??= []).push({
-            message: errorContent,
+            message: { role: 'tool', toolName: name, content: errorContent },
             source: TRACE_SOURCE_TOOL_ERROR
           });
           return errorContent;
@@ -501,13 +504,20 @@ export async function executeToolCallLoop(
     totalToolCalls: 0
   };
 
-  // Record the opt-in tool system prompt as an SDK-injected message when set.
+  // Tag the system (when the SDK injected a tool system prompt) and the user
+  // prompt up front. generateText owns the running message array internally,
+  // so the loop tags what it can observe: the inputs it supplies and the tool
+  // messages it produces.
   if (templates.toolSystemPrompt) {
     (trace.messages ??= []).push({
-      message: { role: 'system', content: templates.toolSystemPrompt },
+      message: { role: 'system', content: effectiveSystem },
       source: TRACE_SOURCE_TOOL_SYSTEM_PROMPT
     });
   }
+  (trace.messages ??= []).push({
+    message: { role: 'user', content: prompt },
+    source: TRACE_SOURCE_USER
+  });
 
   let activeTools = toolMap;
 
@@ -556,6 +566,12 @@ export async function executeToolCallLoop(
       // LLM didn't select any tools in the selection pass — just return text
       trace.totalTurns = selectionResult.steps.length;
       trace.finalResponse = selectionResult.text;
+      if (selectionResult.text) {
+        (trace.messages ??= []).push({
+          message: { role: 'assistant', content: selectionResult.text },
+          source: TRACE_SOURCE_ASSISTANT
+        });
+      }
       return { text: selectionResult.text, trace };
     }
   }
@@ -583,6 +599,12 @@ export async function executeToolCallLoop(
 
   trace.finalResponse = result.text;
   trace.totalTurns = result.steps.length;
+  if (result.text) {
+    (trace.messages ??= []).push({
+      message: { role: 'assistant', content: result.text },
+      source: TRACE_SOURCE_ASSISTANT
+    });
+  }
 
   return { text: result.text, trace };
 }
