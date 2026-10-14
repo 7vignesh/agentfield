@@ -415,6 +415,7 @@ async def execute_tool_call_loop(
     needs_lazy_hydration: bool,
     litellm_params: Dict[str, Any],
     make_completion: Callable,
+    message_sources: Optional[List[str]] = None,
 ) -> tuple[Any, ToolCallTrace]:
     """Execute the LLM tool-call loop.
 
@@ -439,17 +440,18 @@ async def execute_tool_call_loop(
     hydrated = not needs_lazy_hydration
     _timeout_break = False
 
-    # Tag the messages the caller/ai() assembled before the loop. A system
-    # message is SDK-injected here (schema instruction and/or tool system
-    # prompt, assembled in AI.ai()); every other initial message is user
-    # content.
-    for initial_message in messages:
-        role = initial_message.get("role")
-        source = (
-            TRACE_SOURCE_TOOL_SYSTEM_PROMPT
-            if role == "system"
-            else TRACE_SOURCE_USER
-        )
+    # Tag the messages the caller/ai() assembled before the loop. When ai()
+    # supplies per-message provenance (message_sources) use it, since a system
+    # message may be the caller's own, the schema instruction, or the tool
+    # system prompt and cannot be told apart by role alone. Otherwise fall back
+    # to role inference (system -> tool system prompt, else user).
+    for index, initial_message in enumerate(messages):
+        if message_sources is not None and index < len(message_sources):
+            source = message_sources[index]
+        elif initial_message.get("role") == "system":
+            source = TRACE_SOURCE_TOOL_SYSTEM_PROMPT
+        else:
+            source = TRACE_SOURCE_USER
         trace.messages.append(
             TracedMessage(message=initial_message, source=source)
         )

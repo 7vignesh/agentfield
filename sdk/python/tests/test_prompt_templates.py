@@ -459,3 +459,42 @@ async def test_trace_tags_user_and_system_messages():
     sources = [m.source for m in trace.messages]
     assert TRACE_SOURCE_TOOL_SYSTEM_PROMPT in sources
     assert TRACE_SOURCE_USER in sources
+
+
+@pytest.mark.asyncio
+async def test_trace_tags_schema_instruction_via_message_sources():
+    # ai() passes per-message provenance so a schema-instruction system message
+    # is tagged sdk.schema_instruction, not inferred as the tool system prompt
+    # (review #1092).
+    from agentfield.prompt_templates import (
+        TRACE_SOURCE_SCHEMA_INSTRUCTION,
+        TRACE_SOURCE_USER,
+    )
+
+    agent = make_mock_agent()
+    agent.call = AsyncMock(return_value={"ok": True})
+    messages = [
+        {"role": "system", "content": "IMPORTANT: schema instruction ..."},
+        {"role": "user", "content": "go"},
+    ]
+    sources = [TRACE_SOURCE_SCHEMA_INSTRUCTION, TRACE_SOURCE_USER]
+    tools = capabilities_to_tool_schemas([make_reasoner()])
+    responses = iter([make_llm_response(content="done")])
+
+    async def mock_completion(_params):
+        return next(responses)
+
+    _, trace = await execute_tool_call_loop(
+        agent=agent,
+        messages=messages,
+        tools=tools,
+        config=ToolCallConfig(max_turns=2),
+        needs_lazy_hydration=False,
+        litellm_params={"model": "openai/gpt-4"},
+        make_completion=mock_completion,
+        message_sources=sources,
+    )
+
+    tagged = [m.source for m in trace.messages]
+    assert TRACE_SOURCE_SCHEMA_INSTRUCTION in tagged
+    assert tagged[0] == TRACE_SOURCE_SCHEMA_INSTRUCTION

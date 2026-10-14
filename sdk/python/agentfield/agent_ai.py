@@ -13,7 +13,12 @@ if TYPE_CHECKING:
 import requests
 from agentfield.agent_utils import AgentUtils
 from agentfield.logger import log_debug, log_error, log_warn
-from agentfield.prompt_templates import PromptTemplates
+from agentfield.prompt_templates import (
+    TRACE_SOURCE_SCHEMA_INSTRUCTION,
+    TRACE_SOURCE_TOOL_SYSTEM_PROMPT,
+    TRACE_SOURCE_USER,
+    PromptTemplates,
+)
 from agentfield.rate_limiter import StatelessRateLimiter
 from httpx import HTTPStatusError
 from pydantic import BaseModel, ValidationError
@@ -637,6 +642,10 @@ class AgentAI:
 
         # Prepare messages for LiteLLM
         messages = []
+        # Parallel per-message provenance for trace tagging (#229 review): a
+        # system message may carry the schema instruction, the caller's own
+        # system text, or both, and cannot be told apart by role later.
+        message_sources = []
 
         # If a schema is provided, augment the system prompt with strict schema adherence instructions and schema context
         if schema:
@@ -655,15 +664,20 @@ class AgentAI:
             # Merge with any user-provided system prompt
             if schema_instruction is None:
                 system_prompt = system
+                system_source = TRACE_SOURCE_USER
             elif system:
                 system_prompt = f"{system}\n\n{schema_instruction}"
+                system_source = TRACE_SOURCE_SCHEMA_INSTRUCTION
             else:
                 system_prompt = schema_instruction
+                system_source = TRACE_SOURCE_SCHEMA_INSTRUCTION
             if system_prompt:
                 messages.append({"role": "system", "content": system_prompt})
+                message_sources.append(system_source)
         else:
             if system:
                 messages.append({"role": "system", "content": system})
+                message_sources.append(TRACE_SOURCE_USER)
 
         # Handle flexible user input with intelligent processing. When both
         # input styles are used, keep the positional multimodal content and
@@ -693,6 +707,7 @@ class AgentAI:
             processed_content.append({"role": "user", "content": user})
 
         messages.extend(processed_content)
+        message_sources.extend(TRACE_SOURCE_USER for _ in processed_content)
 
         litellm_module = litellm if hasattr(litellm, "acompletion") else None
 
@@ -871,17 +886,29 @@ class AgentAI:
             # the user's system prompt, the same way schema_instruction is.
             tool_system_prompt = prompt_templates.tool_system_prompt
             if tool_system_prompt:
-                system_message = next(
-                    (m for m in messages if m.get("role") == "system"), None
+                system_index = next(
+                    (
+                        i
+                        for i, m in enumerate(messages)
+                        if m.get("role") == "system"
+                    ),
+                    None,
                 )
-                if system_message is not None:
-                    system_message["content"] = (
-                        f"{system_message['content']}\n\n{tool_system_prompt}"
+                if system_index is not None:
+                    messages[system_index]["content"] = (
+                        f"{messages[system_index]['content']}\n\n{tool_system_prompt}"
                     )
+                    # The system message now also carries the tool system
+                    # prompt. Keep schema-instruction provenance when present
+                    # (schema dominates), otherwise mark it as the tool prompt.
+                    if system_index < len(message_sources):
+                        if message_sources[system_index] != TRACE_SOURCE_SCHEMA_INSTRUCTION:
+                            message_sources[system_index] = TRACE_SOURCE_TOOL_SYSTEM_PROMPT
                 else:
                     messages.insert(
                         0, {"role": "system", "content": tool_system_prompt}
                     )
+                    message_sources.insert(0, TRACE_SOURCE_TOOL_SYSTEM_PROMPT)
 
             # Apply per-call overrides
             if max_turns is not None:
@@ -948,6 +975,7 @@ class AgentAI:
                 needs_lazy_hydration=needs_lazy,
                 litellm_params=litellm_params,
                 make_completion=_tool_loop_completion,
+                message_sources=message_sources,
             )
 
             if schema:
