@@ -160,3 +160,39 @@ func TestToolCallTrace_OmitsEmptyMessagesInJSON(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotContains(t, string(data), "\"Messages\"")
 }
+
+// TestToolCallTrace_TagsCallerSystemFromOptions covers the review gap: a caller
+// that supplies their own system message via WithSystem reaches the model but
+// was absent from the trace. It must now be captured as user/caller content.
+func TestToolCallTrace_TagsCallerSystemFromOptions(t *testing.T) {
+	client := newToolLoopClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		require.NoError(t, json.NewEncoder(w).Encode(Response{
+			Choices: []Choice{{
+				Message:      Message{Role: "assistant", Content: []ContentPart{{Type: "text", Text: "ok"}}},
+				FinishReason: "stop",
+			}},
+		}))
+	})
+
+	_, trace, err := client.ExecuteToolCallLoop(
+		context.Background(),
+		[]Message{{Role: "user", Content: []ContentPart{{Type: "text", Text: "go"}}}},
+		[]ToolDefinition{{Type: "function", Function: ToolFunction{Name: "lookup", Parameters: map[string]interface{}{"type": "object"}}}},
+		ToolCallConfig{MaxTurns: 2, MaxToolCalls: 2},
+		func(_ context.Context, _ string, _ map[string]interface{}) (map[string]interface{}, error) {
+			return map[string]interface{}{"ok": true}, nil
+		},
+		WithSystem("Caller system instructions."),
+	)
+	require.NoError(t, err)
+
+	var callerSystem *TracedMessage
+	for i := range trace.Messages {
+		if trace.Messages[i].Source == TraceSourceUser &&
+			trace.Messages[i].Message.Role == "system" {
+			callerSystem = &trace.Messages[i]
+		}
+	}
+	require.NotNil(t, callerSystem, "caller WithSystem text must be traced")
+	assert.Equal(t, "Caller system instructions.", callerSystem.Message.Content[0].Text)
+}

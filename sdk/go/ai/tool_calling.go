@@ -226,6 +226,18 @@ func (c *Client) ExecuteToolCallLoopResult(
 			Source: TraceSourceToolSystemPrompt,
 		})
 	}
+	// A caller may inject their own system message via opts (e.g. WithSystem).
+	// Such text reaches the model but is not in loopMessages, so probe the
+	// caller's own opts (excluding the SDK's tool system prompt) and trace any
+	// system messages they add as caller/user content (#229 review).
+	if callerSystems := systemMessagesFromOptions(opts); len(callerSystems) > 0 {
+		for _, msg := range callerSystems {
+			trace.Messages = append(trace.Messages, TracedMessage{
+				Message: msg,
+				Source:  TraceSourceUser,
+			})
+		}
+	}
 
 	for turn := 0; turn < config.MaxTurns; turn++ {
 		trace.TotalTurns = turn + 1
@@ -386,6 +398,33 @@ func sanitizeToolName(name string) string {
 
 func unsanitizeToolName(name string) string {
 	return strings.ReplaceAll(name, "__", ":")
+}
+
+// systemMessagesFromOptions returns the system messages a caller's options add
+// to a request. Options such as WithSystem inject a system message that reaches
+// the model but never enters loopMessages, so the trace would otherwise miss
+// caller-supplied system text. The probe applies the options to an empty
+// request and returns whatever system messages they produced.
+func systemMessagesFromOptions(opts []Option) []Message {
+	if len(opts) == 0 {
+		return nil
+	}
+	probe := &Request{}
+	for _, opt := range opts {
+		if opt == nil {
+			continue
+		}
+		if err := opt(probe); err != nil {
+			return nil
+		}
+	}
+	var systems []Message
+	for _, msg := range probe.Messages {
+		if msg.Role == "system" {
+			systems = append(systems, msg)
+		}
+	}
+	return systems
 }
 
 func resolvePromptConfig(config *PromptConfig) PromptConfig {
