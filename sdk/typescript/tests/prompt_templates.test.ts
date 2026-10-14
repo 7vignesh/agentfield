@@ -8,7 +8,6 @@ import {
   TRACE_SOURCE_USER,
   TRACE_SOURCE_ASSISTANT,
   TRACE_SOURCE_TOOL_RESULT,
-  TRACE_SOURCE_TOOL_ERROR,
   TRACE_SOURCE_TOOL_SYSTEM_PROMPT,
 } from '../src/ai/PromptTemplates.js';
 import { executeToolCallLoop, buildToolConfig } from '../src/ai/ToolCalling.js';
@@ -57,6 +56,41 @@ describe('resolvePromptTemplates', () => {
     expect(resolved.toolCallLimitReached).toBe('stop now');
     // Unset fields keep their defaults.
     expect(resolved.toolErrorFormatter).toBe(defaultToolErrorFormatter);
+  });
+
+  it('restores the default for an empty-string tool-call-limit message', () => {
+    // ?? would keep '', so an empty override must still fall back (review #1092).
+    expect(resolvePromptTemplates({ toolCallLimitReached: '' }).toolCallLimitReached).toBe(
+      DEFAULT_TOOL_CALL_LIMIT_REACHED
+    );
+  });
+});
+
+describe('empty tool-call-limit through the loop', () => {
+  it('sends the default limit message, not an empty one', async () => {
+    const agent = { call: vi.fn().mockResolvedValue({ ok: true }) } as any;
+    const toolOutputs: unknown[] = [];
+
+    generateTextMock.mockReset();
+    generateTextMock.mockImplementationOnce(async (options: any) => {
+      toolOutputs.push(await options.tools.node__sum.execute({ v: 1 }));
+      return { text: '', steps: [{ toolCalls: [{ toolName: 'node__sum' }] }] };
+    });
+
+    await executeToolCallLoop(
+      agent,
+      'prompt',
+      toolMap,
+      {
+        maxTurns: 2,
+        maxToolCalls: 0,
+        promptTemplates: { toolCallLimitReached: '' }
+      },
+      false,
+      () => ({ provider: 'mock' })
+    );
+
+    expect(toolOutputs[0]).toEqual({ error: DEFAULT_TOOL_CALL_LIMIT_REACHED });
   });
 });
 
@@ -171,7 +205,23 @@ describe('executeToolCallLoop with promptTemplates', () => {
     generateTextMock.mockReset();
     generateTextMock.mockImplementationOnce(async (options: any) => {
       await options.tools.node__sum.execute({ v: 1 });
-      return { text: 'done', steps: [{ toolCalls: [{ toolName: 'node__sum' }] }] };
+      return {
+        text: 'done',
+        steps: [{ toolCalls: [{ toolName: 'node__sum' }] }],
+        response: {
+          messages: [
+            {
+              role: 'assistant',
+              content: [{ type: 'tool-call', toolCallId: 'c1', toolName: 'node__sum' }]
+            },
+            {
+              role: 'tool',
+              content: [{ type: 'tool-result', toolCallId: 'c1', toolName: 'node__sum' }]
+            },
+            { role: 'assistant', content: 'done' }
+          ]
+        }
+      };
     });
 
     const result = await executeToolCallLoop(
@@ -188,7 +238,10 @@ describe('executeToolCallLoop with promptTemplates', () => {
     );
 
     const sources = (result.trace.messages ?? []).map((m) => m.source);
+    // The injected tool system prompt and user prompt are tagged up front;
+    // the tool result comes from the AI SDK's response.messages.
     expect(sources).toContain(TRACE_SOURCE_TOOL_SYSTEM_PROMPT);
+    expect(sources).toContain(TRACE_SOURCE_USER);
     expect(sources).toContain(TRACE_SOURCE_TOOL_RESULT);
   });
 
@@ -198,7 +251,23 @@ describe('executeToolCallLoop with promptTemplates', () => {
     generateTextMock.mockReset();
     generateTextMock.mockImplementationOnce(async (options: any) => {
       await options.tools.node__sum.execute({ v: 1 });
-      return { text: 'handled', steps: [{ toolCalls: [{ toolName: 'node__sum' }] }] };
+      return {
+        text: 'handled',
+        steps: [{ toolCalls: [{ toolName: 'node__sum' }] }],
+        response: {
+          messages: [
+            {
+              role: 'assistant',
+              content: [{ type: 'tool-call', toolCallId: 'c1', toolName: 'node__sum' }]
+            },
+            {
+              role: 'tool',
+              content: [{ type: 'tool-result', toolCallId: 'c1', toolName: 'node__sum' }]
+            },
+            { role: 'assistant', content: 'handled' }
+          ]
+        }
+      };
     });
 
     const result = await executeToolCallLoop(
@@ -211,15 +280,26 @@ describe('executeToolCallLoop with promptTemplates', () => {
     );
 
     const sources = (result.trace.messages ?? []).map((m) => m.source);
-    expect(sources).toContain(TRACE_SOURCE_TOOL_ERROR);
+    // The assistant turn (with its tool-call request) and the tool result are
+    // both captured from response.messages, with their identifiers preserved.
+    expect(sources).toContain(TRACE_SOURCE_ASSISTANT);
+    expect(sources).toContain(TRACE_SOURCE_TOOL_RESULT);
+    const toolMsg = (result.trace.messages ?? []).find(
+      (m) => m.source === TRACE_SOURCE_TOOL_RESULT
+    );
+    expect((toolMsg?.message as any).content[0].toolCallId).toBe('c1');
   });
 
-  it('always tags the user prompt and final assistant message', async () => {
+  it('tags the user prompt and the actual response messages', async () => {
     const agent = { call: vi.fn().mockResolvedValue({ ok: true }) } as any;
 
     generateTextMock.mockReset();
     generateTextMock.mockImplementationOnce(async () => {
-      return { text: 'done', steps: [] };
+      return {
+        text: 'done',
+        steps: [],
+        response: { messages: [{ role: 'assistant', content: 'done' }] }
+      };
     });
 
     const result = await executeToolCallLoop(
@@ -231,8 +311,8 @@ describe('executeToolCallLoop with promptTemplates', () => {
       () => ({ provider: 'mock' })
     );
 
-    // Even with no tool calls, the user prompt and the model's final text are
-    // captured with their provenance (review #1092).
+    // The user prompt is tagged up front; the assistant message comes from the
+    // AI SDK's response.messages (review #1092).
     expect(result.trace.messages).toEqual([
       { message: { role: 'user', content: 'prompt' }, source: TRACE_SOURCE_USER },
       { message: { role: 'assistant', content: 'done' }, source: TRACE_SOURCE_ASSISTANT }

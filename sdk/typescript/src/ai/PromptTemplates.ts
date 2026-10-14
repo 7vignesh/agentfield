@@ -70,10 +70,13 @@ export interface ResolvedPromptTemplates {
 export function resolvePromptTemplates(
   overrides?: Partial<PromptTemplates>
 ): ResolvedPromptTemplates {
+  // An empty string must restore the default (?? only guards null/undefined),
+  // so an unusable empty tool-limit message is never sent (review #1092).
+  const limit = overrides?.toolCallLimitReached;
   return {
     toolSystemPrompt: overrides?.toolSystemPrompt,
     toolCallLimitReached:
-      overrides?.toolCallLimitReached ?? DEFAULT_TOOL_CALL_LIMIT_REACHED,
+      limit && limit.length > 0 ? limit : DEFAULT_TOOL_CALL_LIMIT_REACHED,
     toolErrorFormatter: overrides?.toolErrorFormatter ?? defaultToolErrorFormatter,
     toolResultFormatter:
       overrides?.toolResultFormatter ?? defaultToolResultFormatter,

@@ -24,8 +24,6 @@ import {
   resolvePromptTemplates,
   TRACE_SOURCE_USER,
   TRACE_SOURCE_ASSISTANT,
-  TRACE_SOURCE_TOOL_ERROR,
-  TRACE_SOURCE_TOOL_LIMIT,
   TRACE_SOURCE_TOOL_RESULT,
   TRACE_SOURCE_TOOL_SYSTEM_PROMPT,
 } from './PromptTemplates.js';
@@ -418,10 +416,6 @@ function wrapToolsWithObservability(
           };
           trace.calls.push(record);
           const limitContent = { error: templates.toolCallLimitReached };
-          (trace.messages ??= []).push({
-            message: { role: 'tool', toolName: name, content: limitContent },
-            source: TRACE_SOURCE_TOOL_LIMIT
-          });
           return limitContent;
         }
 
@@ -441,10 +435,6 @@ function wrapToolsWithObservability(
           record.latencyMs = Date.now() - start;
           trace.calls.push(record);
           const resultContent = templates.toolResultFormatter(name, result);
-          (trace.messages ??= []).push({
-            message: { role: 'tool', toolName: name, content: resultContent },
-            source: TRACE_SOURCE_TOOL_RESULT
-          });
           return resultContent;
         } catch (err: any) {
           const message = err.message ?? String(err);
@@ -452,10 +442,6 @@ function wrapToolsWithObservability(
           record.latencyMs = Date.now() - start;
           trace.calls.push(record);
           const errorContent = templates.toolErrorFormatter(name, message);
-          (trace.messages ??= []).push({
-            message: { role: 'tool', toolName: name, content: errorContent },
-            source: TRACE_SOURCE_TOOL_ERROR
-          });
           return errorContent;
         }
       }
@@ -566,12 +552,7 @@ export async function executeToolCallLoop(
       // LLM didn't select any tools in the selection pass — just return text
       trace.totalTurns = selectionResult.steps.length;
       trace.finalResponse = selectionResult.text;
-      if (selectionResult.text) {
-        (trace.messages ??= []).push({
-          message: { role: 'assistant', content: selectionResult.text },
-          source: TRACE_SOURCE_ASSISTANT
-        });
-      }
+      appendResponseMessages(trace, selectionResult);
       return { text: selectionResult.text, trace };
     }
   }
@@ -599,12 +580,38 @@ export async function executeToolCallLoop(
 
   trace.finalResponse = result.text;
   trace.totalTurns = result.steps.length;
-  if (result.text) {
-    (trace.messages ??= []).push({
-      message: { role: 'assistant', content: result.text },
-      source: TRACE_SOURCE_ASSISTANT
-    });
-  }
+  appendResponseMessages(trace, result);
 
   return { text: result.text, trace };
+}
+
+// appendResponseMessages tags the actual conversation the AI SDK produced
+// (assistant turns, their tool-call requests, and tool results) from
+// result.response.messages, preserving the SDK's structure, tool-call ids and
+// order. The user prompt and injected system prompt are tagged separately up
+// front since they are inputs, not part of response.messages (#229 review).
+function appendResponseMessages(
+  trace: ToolCallTrace,
+  result: { response?: { messages?: any[] } }
+): void {
+  const responseMessages = result.response?.messages;
+  if (!Array.isArray(responseMessages)) {
+    return;
+  }
+  for (const message of responseMessages) {
+    const role = message?.role;
+    let source: TracedMessage['source'];
+    if (role === 'assistant') {
+      source = TRACE_SOURCE_ASSISTANT;
+    } else if (role === 'tool') {
+      // Tool results come back as tool-role messages; the model's own text
+      // and tool-call requests are assistant messages above.
+      source = TRACE_SOURCE_TOOL_RESULT;
+    } else if (role === 'system') {
+      source = TRACE_SOURCE_TOOL_SYSTEM_PROMPT;
+    } else {
+      source = TRACE_SOURCE_USER;
+    }
+    (trace.messages ??= []).push({ message, source });
+  }
 }
