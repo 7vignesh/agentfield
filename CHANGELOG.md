@@ -6,6 +6,172 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.142-rc.12] - 2026-10-15
+
+
+### Fixed
+
+- Fix(control-plane): write the executions row for legacy reasoner and skill calls (#1099)
+
+* fix(control-plane): write the executions row for legacy reasoner and skill calls
+
+ExecuteReasonerHandler and ExecuteSkillHandler (POST /reasoners/:id and
+/skills/:id) sent X-Execution-ID to the agent but never created the
+executions row, so the agent's POST /api/v1/executions/:id/status
+callback hit UpdateExecutionRecord with no row and got a 404.
+
+Both handlers now create the row (status running) right after the input
+is marshalled, before the serverless branch and before dispatch. The
+shape matches the normal execute path in execute_prepare.go. A failed
+insert is logged and the call continues, so the legacy endpoints gain
+no new failure mode.
+
+persistWorkflowExecution, which every terminal exit of both handlers
+already calls, now also copies status, error, result, completed_at and
+duration onto the executions row. A row the agent's own callback has
+already made terminal is left untouched.
+
+Tests: two handler tests check the row exists while the agent is being
+called and ends as succeeded. A third test runs the legacy reasoner
+endpoint and the real status callback handler on LocalStorage; the stub
+agent posts a failed status callback during dispatch. It gets a 404 on
+main and a 200 here, and the agent's failed status is kept. A fourth
+test makes the insert fail and checks the call still returns 200.
+
+Test storages: reasonerHandlerStorage gains GetExecutionRecord and
+UpdateExecutionRecord passthroughs; reasonerTestStorage and
+persistWorkflowExecutionStore gain the record methods the handlers now
+call, so they do not hit the nil embedded interface.
+
+Fixes #1086
+
+$ cd control-plane && go test -tags sqlite_fts5 ./internal/handlers/ \
+    -run 'CreatesExecutionRowBeforeDispatch|AgentStatusCallbackFindsExecution' -v
+
+On main (tests only):
+--- FAIL: TestExecuteReasonerHandler_CreatesExecutionRowBeforeDispatch
+    Messages: executions row must exist while the agent is being called
+--- FAIL: TestExecuteSkillHandler_CreatesExecutionRowBeforeDispatch
+    Messages: executions row must exist while the agent is being called
+--- FAIL: TestExecuteReasonerHandler_AgentStatusCallbackFindsExecution
+    expected: 200, actual: 404
+
+With the fix: all 3 PASS.
+
+$ go test -tags sqlite_fts5 ./internal/handlers/... ./internal/storage/...
+2547 passed, 0 failed, 39 skipped (6 packages ok)
+$ go vet -tags sqlite_fts5 ./internal/handlers/ ./internal/storage/   clean
+$ golangci-lint run --new-from-rev=upstream/main ./internal/handlers/  0 issues
+
+* fix(control-plane): keep 202 acknowledgements running and finalize cancelled legacy calls
+
+Addresses review on #1099.
+
+202 acknowledgements. The Python and Go SDKs answer an async execution
+with HTTP 202 and status "processing" while the reasoner keeps running.
+The legacy reasoner and skill handlers treated that as success, and the
+finalizer then wrote "succeeded" with the acknowledgement as the result.
+A later failed callback got 409, a later successful one was a no-op that
+kept the acknowledgement, and a late failed workflow event could not
+repair the row.
+
+On a 202 both handlers now persist the workflow row as running and leave
+the executions row running, so the agent's status callback or workflow
+event completes the execution. If the callback landed before the 202
+came back, it found no workflow row to update; the acknowledgement then
+copies the terminal outcome from the executions row instead of leaving
+the workflow row running. The response to the legacy caller is
+unchanged.
+
+Cancelled requests. persistWorkflowExecution and the finalizer reused
+the request context, so a caller cancelling after dispatch made the
+dispatch fail and the final writes fail with it, leaving the row running
+with no completion time. Final persistence now runs on
+context.WithoutCancel(ctx) bounded by a 5 s timeout. The terminal-state
+guard in the finalizer is kept.
+
+Tests (real LocalStorage):
+- TestLegacyExecute_CallbackAfterAsyncAcknowledgement
+  {reasoner,skill}/{succeeded,failed}
+- TestLegacyExecute_CallbackBeforeAsyncAcknowledgement
+- TestLegacyExecute_FailedWorkflowEventAfterAsyncAcknowledgement
+- TestLegacyExecute_CancelledRequestFinalizesExecution/{reasoner,skill}
+
+$ cd control-plane && go test -tags sqlite_fts5 ./internal/handlers/ -run 'TestLegacyExecute_' -v
+
+On 61e498fb (tests only):
+--- FAIL: TestLegacyExecute_CallbackAfterAsyncAcknowledgement (4/4 subtests)
+    expected: "running", actual: "succeeded"
+    Messages: a 202 acknowledgement is not the result
+--- FAIL: TestLegacyExecute_CallbackBeforeAsyncAcknowledgement
+    workflow output is {"status":"processing",...}, not {"answer":42}
+--- FAIL: TestLegacyExecute_FailedWorkflowEventAfterAsyncAcknowledgement
+    expected: "failed", actual: "succeeded"
+--- FAIL: TestLegacyExecute_CancelledRequestFinalizesExecution (2/2 subtests)
+    expected: "failed", actual: "running"
+
+With the fix: all PASS (also -count=5).
+
+$ go test -tags sqlite_fts5 ./internal/handlers/... ./internal/storage/... ./internal/server/...
+10 packages ok, 0 failed
+$ go vet -tags sqlite_fts5 ./internal/handlers/... ./internal/storage/...   clean
+
+---------
+
+Co-authored-by: ZeroPoint95 <329227198+ZeroPoint95@users.noreply.github.com> (ef72128)
+
+## [0.1.142-rc.11] - 2026-10-15
+
+
+### Added
+
+- Feat(sdk/go/ai): support IO Intelligence (io.net) provider (#1102)
+
+* feat(sdk/go/ai): support IO Intelligence (io.net) provider
+
+Mirror the Infron gateway support (#874) for IO Intelligence, io.net's
+OpenAI-compatible Chat Completions endpoint:
+
+- DefaultConfig picks up IONET_API_KEY when no provider key with higher
+  precedence is set, pointing at
+  https://api.intelligence.io.solutions/api/v1 (OPENAI, INFRON and
+  OPENROUTER keys all keep precedence, so adding IONET_API_KEY never
+  silently reroutes an existing deployment).
+- IsIonet() detects the endpoint by base URL or an ionet/ model prefix.
+- The ionet/ model prefix is a routing marker only and is stripped
+  before the request goes out: the endpoint serves bare Hugging
+  Face-style org/name ids (e.g.
+  meta-llama/Llama-3.3-70B-Instruct).
+- No usage opt-in or attribution headers: io.net reports usage in the
+  standard Chat Completions shape.
+- Documented in docs/ENVIRONMENT_VARIABLES.md and the Go SDK README,
+  next to the Infron sections.
+
+go test ./ai/... passes; the new suite covers env pickup and
+precedence, IsIonet, prefix stripping on the wire, no usage opt-in,
+and max_tokens preservation.
+
+* fix(sdk/go/ai): default to an io.net model when the io.net key is selected
+
+* fix(sdk/go/ai): decide the io.net default model with the same detection as the request path
+
+* docs(sdk/go/ai): state that the ionet/ marker never reroutes a request
+
+* docs(sdk/go/ai): refresh the APIKey doc comment and note catalog rotation
+
+* test(sdk/go/ai): isolate the config-error and ionet tests from ambient keys
+
+The config-validation subtest cleared the OpenAI, OpenRouter, base-URL and
+model variables but not the Infron and io.net keys, so an exported io.net key
+turned it into a live request against the real endpoint. Clear all six
+selection variables in the subtest, move the ionet env handling to t.Setenv
+like the rest of the package, and add a tools/tool_choice passthrough case
+for the ionet/ model marker.
+
+---------
+
+Co-authored-by: ZeroPoint95 <329227198+ZeroPoint95@users.noreply.github.com> (0e134b1)
+
 ## [0.1.142-rc.10] - 2026-10-14
 
 
