@@ -25,6 +25,8 @@ import {
   TRACE_SOURCE_USER,
   TRACE_SOURCE_ASSISTANT,
   TRACE_SOURCE_TOOL_RESULT,
+  TRACE_SOURCE_TOOL_ERROR,
+  TRACE_SOURCE_TOOL_LIMIT,
   TRACE_SOURCE_TOOL_SYSTEM_PROMPT,
 } from './PromptTemplates.js';
 
@@ -392,7 +394,8 @@ function wrapToolsWithObservability(
   trace: ToolCallTrace,
   maxToolCalls: number,
   getCurrentTurn: () => number,
-  templates: ResolvedPromptTemplates
+  templates: ResolvedPromptTemplates,
+  toolMessageSources: Map<string, TracedMessage['source']>
 ): { tools: ToolSet; getTotalCalls: () => number } {
   let totalCalls = 0;
   const observableTools: ToolSet = {};
@@ -402,9 +405,16 @@ function wrapToolsWithObservability(
     observableTools[name] = tool({
       description: originalTool.description ?? '',
       inputSchema: originalTool.inputSchema,
-      execute: async (args: any) => {
+      execute: async (args: any, opts?: { toolCallId?: string }) => {
         totalCalls++;
         trace.totalToolCalls = totalCalls;
+        const toolCallId = opts?.toolCallId;
+        const recordSource = (source: TracedMessage['source']) => {
+          // Record the provenance of this tool call by id so the trace built
+          // from response.messages can tell results, errors and limit
+          // responses apart (they all come back as tool-role messages).
+          if (toolCallId) toolMessageSources.set(toolCallId, source);
+        };
 
         if (totalCalls > maxToolCalls) {
           const record: ToolCallRecord = {
@@ -415,6 +425,7 @@ function wrapToolsWithObservability(
             turn: getCurrentTurn()
           };
           trace.calls.push(record);
+          recordSource(TRACE_SOURCE_TOOL_LIMIT);
           const limitContent = { error: templates.toolCallLimitReached };
           return limitContent;
         }
@@ -434,6 +445,7 @@ function wrapToolsWithObservability(
           record.result = result;
           record.latencyMs = Date.now() - start;
           trace.calls.push(record);
+          recordSource(TRACE_SOURCE_TOOL_RESULT);
           const resultContent = templates.toolResultFormatter(name, result);
           return resultContent;
         } catch (err: any) {
@@ -441,6 +453,7 @@ function wrapToolsWithObservability(
           record.error = message;
           record.latencyMs = Date.now() - start;
           trace.calls.push(record);
+          recordSource(TRACE_SOURCE_TOOL_ERROR);
           const errorContent = templates.toolErrorFormatter(name, message);
           return errorContent;
         }
@@ -490,14 +503,19 @@ export async function executeToolCallLoop(
     totalToolCalls: 0
   };
 
-  // Tag the system (when the SDK injected a tool system prompt) and the user
-  // prompt up front. generateText owns the running message array internally,
-  // so the loop tags what it can observe: the inputs it supplies and the tool
-  // messages it produces.
-  if (templates.toolSystemPrompt) {
+  // Tag the system and user inputs up front. generateText owns the running
+  // message array internally, so the loop tags the inputs it supplies here and
+  // reads the model/tool turns back from result.response.messages.
+  //
+  // Provenance of the system message: when the SDK injected a tool system
+  // prompt, effectiveSystem is SDK-owned; a caller-only system prompt
+  // (options.system with no tool prompt) is caller/user content.
+  if (effectiveSystem) {
     (trace.messages ??= []).push({
       message: { role: 'system', content: effectiveSystem },
-      source: TRACE_SOURCE_TOOL_SYSTEM_PROMPT
+      source: templates.toolSystemPrompt
+        ? TRACE_SOURCE_TOOL_SYSTEM_PROMPT
+        : TRACE_SOURCE_USER
     });
   }
   (trace.messages ??= []).push({
@@ -541,6 +559,10 @@ export async function executeToolCallLoop(
     }
 
     if (selectedNames.size > 0) {
+      // The selection pass is a real model turn (it emitted tool-call
+      // requests); capture its conversation before the hydrated pass so the
+      // trace retains both model passes (#229 review).
+      appendResponseMessages(trace, selectionResult);
       // Hydrate full schemas for selected tools
       const hydratedTools = await hydrateSelectedTools(
         agent, config, Array.from(selectedNames)
@@ -558,8 +580,12 @@ export async function executeToolCallLoop(
   }
 
   let currentTurn = 0;
+  // Maps a tool-call id to the provenance the wrapper observed for it, so the
+  // trace built from response.messages can distinguish tool results from
+  // errors and limit responses (all tool-role messages otherwise).
+  const toolMessageSources = new Map<string, TracedMessage['source']>();
   const { tools: observableTools } = wrapToolsWithObservability(
-    activeTools, agent, trace, maxToolCalls, () => currentTurn, templates
+    activeTools, agent, trace, maxToolCalls, () => currentTurn, templates, toolMessageSources
   );
 
   const model = buildModel();
@@ -580,7 +606,7 @@ export async function executeToolCallLoop(
 
   trace.finalResponse = result.text;
   trace.totalTurns = result.steps.length;
-  appendResponseMessages(trace, result);
+  appendResponseMessages(trace, result, toolMessageSources);
 
   return { text: result.text, trace };
 }
@@ -590,9 +616,14 @@ export async function executeToolCallLoop(
 // result.response.messages, preserving the SDK's structure, tool-call ids and
 // order. The user prompt and injected system prompt are tagged separately up
 // front since they are inputs, not part of response.messages (#229 review).
+//
+// toolMessageSources maps a tool-call id to the provenance the wrapper observed
+// (result, error, or limit), so tool-role messages are tagged accurately rather
+// than all as sdk.tool_result.
 function appendResponseMessages(
   trace: ToolCallTrace,
-  result: { response?: { messages?: any[] } }
+  result: { response?: { messages?: any[] } },
+  toolMessageSources?: Map<string, TracedMessage['source']>
 ): void {
   const responseMessages = result.response?.messages;
   if (!Array.isArray(responseMessages)) {
@@ -604,9 +635,10 @@ function appendResponseMessages(
     if (role === 'assistant') {
       source = TRACE_SOURCE_ASSISTANT;
     } else if (role === 'tool') {
-      // Tool results come back as tool-role messages; the model's own text
-      // and tool-call requests are assistant messages above.
-      source = TRACE_SOURCE_TOOL_RESULT;
+      // A tool-role message carries one or more tool-result parts; use the
+      // wrapper-recorded provenance for its tool-call id, falling back to
+      // result when unknown.
+      source = toolSourceForMessage(message, toolMessageSources);
     } else if (role === 'system') {
       source = TRACE_SOURCE_TOOL_SYSTEM_PROMPT;
     } else {
@@ -614,4 +646,29 @@ function appendResponseMessages(
     }
     (trace.messages ??= []).push({ message, source });
   }
+}
+
+// toolSourceForMessage reads the tool-call id(s) from a tool-role message and
+// returns the provenance the wrapper recorded for it. When the message carries
+// an errored or limit-rejected call, that provenance wins over a plain result.
+function toolSourceForMessage(
+  message: any,
+  toolMessageSources?: Map<string, TracedMessage['source']>
+): TracedMessage['source'] {
+  if (!toolMessageSources) {
+    return TRACE_SOURCE_TOOL_RESULT;
+  }
+  const parts = Array.isArray(message?.content) ? message.content : [];
+  let fallback: TracedMessage['source'] = TRACE_SOURCE_TOOL_RESULT;
+  for (const part of parts) {
+    const id = part?.toolCallId;
+    if (id && toolMessageSources.has(id)) {
+      const recorded = toolMessageSources.get(id)!;
+      if (recorded !== TRACE_SOURCE_TOOL_RESULT) {
+        return recorded;
+      }
+      fallback = recorded;
+    }
+  }
+  return fallback;
 }

@@ -8,6 +8,8 @@ import {
   TRACE_SOURCE_USER,
   TRACE_SOURCE_ASSISTANT,
   TRACE_SOURCE_TOOL_RESULT,
+  TRACE_SOURCE_TOOL_ERROR,
+  TRACE_SOURCE_TOOL_LIMIT,
   TRACE_SOURCE_TOOL_SYSTEM_PROMPT,
 } from '../src/ai/PromptTemplates.js';
 import { executeToolCallLoop, buildToolConfig } from '../src/ai/ToolCalling.js';
@@ -250,7 +252,9 @@ describe('executeToolCallLoop with promptTemplates', () => {
 
     generateTextMock.mockReset();
     generateTextMock.mockImplementationOnce(async (options: any) => {
-      await options.tools.node__sum.execute({ v: 1 });
+      // Pass the tool-call id to execute(), as the AI SDK does, so provenance
+      // is recorded against it.
+      await options.tools.node__sum.execute({ v: 1 }, { toolCallId: 'c1' });
       return {
         text: 'handled',
         steps: [{ toolCalls: [{ toolName: 'node__sum' }] }],
@@ -280,14 +284,77 @@ describe('executeToolCallLoop with promptTemplates', () => {
     );
 
     const sources = (result.trace.messages ?? []).map((m) => m.source);
-    // The assistant turn (with its tool-call request) and the tool result are
-    // both captured from response.messages, with their identifiers preserved.
     expect(sources).toContain(TRACE_SOURCE_ASSISTANT);
-    expect(sources).toContain(TRACE_SOURCE_TOOL_RESULT);
+    // A failed tool call is tagged sdk.tool_error, not sdk.tool_result.
+    expect(sources).toContain(TRACE_SOURCE_TOOL_ERROR);
+    expect(sources).not.toContain(TRACE_SOURCE_TOOL_RESULT);
     const toolMsg = (result.trace.messages ?? []).find(
-      (m) => m.source === TRACE_SOURCE_TOOL_RESULT
+      (m) => m.source === TRACE_SOURCE_TOOL_ERROR
     );
     expect((toolMsg?.message as any).content[0].toolCallId).toBe('c1');
+  });
+
+  it('tags a tool-limit response as sdk.tool_limit', async () => {
+    const agent = { call: vi.fn().mockResolvedValue({ ok: true }) } as any;
+
+    generateTextMock.mockReset();
+    generateTextMock.mockImplementationOnce(async (options: any) => {
+      await options.tools.node__sum.execute({ v: 1 }, { toolCallId: 'c1' });
+      return {
+        text: 'done',
+        steps: [{ toolCalls: [{ toolName: 'node__sum' }] }],
+        response: {
+          messages: [
+            {
+              role: 'tool',
+              content: [{ type: 'tool-result', toolCallId: 'c1', toolName: 'node__sum' }]
+            }
+          ]
+        }
+      };
+    });
+
+    const result = await executeToolCallLoop(
+      agent,
+      'prompt',
+      toolMap,
+      { maxTurns: 2, maxToolCalls: 0 },
+      false,
+      () => ({ provider: 'mock' })
+    );
+
+    const sources = (result.trace.messages ?? []).map((m) => m.source);
+    expect(sources).toContain(TRACE_SOURCE_TOOL_LIMIT);
+  });
+
+  it('tags a caller-only system prompt as user content', async () => {
+    const agent = { call: vi.fn().mockResolvedValue({ ok: true }) } as any;
+
+    generateTextMock.mockReset();
+    generateTextMock.mockImplementationOnce(async () => {
+      return {
+        text: 'done',
+        steps: [],
+        response: { messages: [{ role: 'assistant', content: 'done' }] }
+      };
+    });
+
+    const result = await executeToolCallLoop(
+      agent,
+      'prompt',
+      toolMap,
+      { maxTurns: 2, maxToolCalls: 3 },
+      false,
+      () => ({ provider: 'mock' }),
+      { system: 'You are helpful.' }
+    );
+
+    // A caller system prompt (no tool system prompt) is caller content.
+    const systemMsg = (result.trace.messages ?? []).find(
+      (m) => (m.message as any).role === 'system'
+    );
+    expect(systemMsg?.source).toBe(TRACE_SOURCE_USER);
+    expect((systemMsg?.message as any).content).toBe('You are helpful.');
   });
 
   it('tags the user prompt and the actual response messages', async () => {
