@@ -196,3 +196,38 @@ func TestToolCallTrace_TagsCallerSystemFromOptions(t *testing.T) {
 	require.NotNil(t, callerSystem, "caller WithSystem text must be traced")
 	assert.Equal(t, "Caller system instructions.", callerSystem.Message.Content[0].Text)
 }
+
+// TestToolCallTrace_DoesNotReplayOptions guards the review finding: provenance
+// capture must read the real request, not re-execute caller options (which runs
+// their side effects twice). A counting option must fire exactly once per turn.
+func TestToolCallTrace_DoesNotReplayOptions(t *testing.T) {
+	client := newToolLoopClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		require.NoError(t, json.NewEncoder(w).Encode(Response{
+			Choices: []Choice{{
+				Message:      Message{Role: "assistant", Content: []ContentPart{{Type: "text", Text: "ok"}}},
+				FinishReason: "stop",
+			}},
+		}))
+	})
+
+	var applied int
+	countingOption := func(r *Request) error {
+		applied++
+		return nil
+	}
+
+	_, _, err := client.ExecuteToolCallLoop(
+		context.Background(),
+		[]Message{{Role: "user", Content: []ContentPart{{Type: "text", Text: "go"}}}},
+		[]ToolDefinition{{Type: "function", Function: ToolFunction{Name: "lookup", Parameters: map[string]interface{}{"type": "object"}}}},
+		ToolCallConfig{MaxTurns: 1, MaxToolCalls: 2},
+		func(_ context.Context, _ string, _ map[string]interface{}) (map[string]interface{}, error) {
+			return map[string]interface{}{"ok": true}, nil
+		},
+		countingOption,
+	)
+	require.NoError(t, err)
+	// One turn builds one request, so the option applies exactly once; the
+	// trace must not have re-run it for provenance capture.
+	assert.Equal(t, 1, applied, "caller option must not be executed twice")
+}
