@@ -6,6 +6,46 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.142-rc.14] - 2026-10-17
+
+
+### Fixed
+
+- Fix(sdk/python): make memory exists() detect a missing key (#1106)
+
+* fix(sdk/python): make memory exists() detect a missing key
+
+MemoryClient.exists() called get() and reported True whenever it did not
+raise. get() answers the control plane's deliberate 404 for an absent key
+with the caller's default instead of raising, so exists() returned True for
+every key as long as the backend was reachable, and the scoped, global and
+MemoryInterface surfaces inherited that answer. #966 documented the behavior
+and left the implementation fix for its own PR.
+
+Decide presence against a private sentinel passed as get()'s default: a
+stored value -- including a falsy one such as None, 0 or "" -- means True,
+a 404 means False, and a transport or backend failure still means False.
+get()'s default-on-404 contract is unchanged. This matches the TypeScript
+sibling, which decides presence from the returned value rather than from
+"did not raise". The four docstrings #966 rewrote now state the real
+behavior again.
+
+Refs #966
+
+* docs(sdk/python): state the real memory exists() contract in Agent.memory
+
+#966 recorded the exists() limitation in five places: the four docstrings in
+memory.py and the exists bullet of the Agent.memory "Memory Operations" API
+list. The previous commit corrected the four; this completes the set so the
+advertised API list no longer contradicts the implementation it describes,
+and drops the get(key, sentinel) workaround that is no longer needed.
+
+Refs #966
+
+---------
+
+Co-authored-by: ZeroPoint95 <329227198+ZeroPoint95@users.noreply.github.com> (2460793)
+
 ## [0.1.142-rc.13] - 2026-10-17
 
 
