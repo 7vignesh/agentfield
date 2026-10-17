@@ -231,3 +231,161 @@ func TestToolCallTrace_DoesNotReplayOptions(t *testing.T) {
 	// trace must not have re-run it for provenance capture.
 	assert.Equal(t, 1, applied, "caller option must not be executed twice")
 }
+
+// TestToolCallTrace_CallerAndSDKSystemProvenance covers the review checklist:
+// with both a caller WithSystem("CALLER") and config.SystemPrompt="SDK", the
+// request order is CALLER, SDK, user (WithSystem prepends). Each system occurs
+// once with its correct source, and SDK is not recorded twice.
+func TestToolCallTrace_CallerAndSDKSystemProvenance(t *testing.T) {
+	client := newToolLoopClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		require.NoError(t, json.NewEncoder(w).Encode(Response{
+			Choices: []Choice{{
+				Message:      Message{Role: "assistant", Content: []ContentPart{{Type: "text", Text: "done"}}},
+				FinishReason: "stop",
+			}},
+		}))
+	})
+
+	_, trace, err := client.ExecuteToolCallLoop(
+		context.Background(),
+		[]Message{{Role: "user", Content: []ContentPart{{Type: "text", Text: "go"}}}},
+		[]ToolDefinition{{Type: "function", Function: ToolFunction{Name: "lookup", Parameters: map[string]interface{}{"type": "object"}}}},
+		ToolCallConfig{MaxTurns: 1, MaxToolCalls: 1, SystemPrompt: "SDK"},
+		func(_ context.Context, _ string, _ map[string]interface{}) (map[string]interface{}, error) {
+			return map[string]interface{}{"ok": true}, nil
+		},
+		WithSystem("CALLER"),
+	)
+	require.NoError(t, err)
+
+	type st struct{ text, source string }
+	var systems []st
+	for _, m := range trace.Messages {
+		if m.Message.Role == "system" {
+			systems = append(systems, st{m.Message.Content[0].Text, m.Source})
+		}
+	}
+	// CALLER (caller content) and SDK (tool system prompt), each exactly once,
+	// in request order.
+	assert.Equal(t, []st{
+		{"CALLER", TraceSourceUser},
+		{"SDK", TraceSourceToolSystemPrompt},
+	}, systems)
+}
+
+// TestToolCallTrace_InitialSystemNotDoubleTraced: a system message already in
+// the initial list is traced once, not duplicated.
+func TestToolCallTrace_InitialSystemNotDoubleTraced(t *testing.T) {
+	client := newToolLoopClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		require.NoError(t, json.NewEncoder(w).Encode(Response{
+			Choices: []Choice{{
+				Message:      Message{Role: "assistant", Content: []ContentPart{{Type: "text", Text: "done"}}},
+				FinishReason: "stop",
+			}},
+		}))
+	})
+
+	_, trace, err := client.ExecuteToolCallLoop(
+		context.Background(),
+		[]Message{
+			{Role: "system", Content: []ContentPart{{Type: "text", Text: "INITIAL"}}},
+			{Role: "user", Content: []ContentPart{{Type: "text", Text: "go"}}},
+		},
+		[]ToolDefinition{{Type: "function", Function: ToolFunction{Name: "lookup", Parameters: map[string]interface{}{"type": "object"}}}},
+		ToolCallConfig{MaxTurns: 1, MaxToolCalls: 1},
+		func(_ context.Context, _ string, _ map[string]interface{}) (map[string]interface{}, error) {
+			return map[string]interface{}{"ok": true}, nil
+		},
+	)
+	require.NoError(t, err)
+
+	count := 0
+	for _, m := range trace.Messages {
+		if m.Message.Role == "system" && m.Message.Content[0].Text == "INITIAL" {
+			count++
+			assert.Equal(t, TraceSourceUser, m.Source)
+		}
+	}
+	assert.Equal(t, 1, count, "initial system message must be traced exactly once")
+}
+
+// TestToolCallTrace_MaxTurnsZeroStillTracesCallerSystem: MaxTurns:0 still sends
+// the final request, and caller system text must be in its trace.
+func TestToolCallTrace_MaxTurnsZeroStillTracesCallerSystem(t *testing.T) {
+	client := newToolLoopClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		require.NoError(t, json.NewEncoder(w).Encode(Response{
+			Choices: []Choice{{
+				Message:      Message{Role: "assistant", Content: []ContentPart{{Type: "text", Text: "done"}}},
+				FinishReason: "stop",
+			}},
+		}))
+	})
+
+	_, trace, err := client.ExecuteToolCallLoop(
+		context.Background(),
+		[]Message{{Role: "user", Content: []ContentPart{{Type: "text", Text: "go"}}}},
+		[]ToolDefinition{{Type: "function", Function: ToolFunction{Name: "lookup", Parameters: map[string]interface{}{"type": "object"}}}},
+		ToolCallConfig{MaxTurns: 0, MaxToolCalls: 1},
+		func(_ context.Context, _ string, _ map[string]interface{}) (map[string]interface{}, error) {
+			return map[string]interface{}{"ok": true}, nil
+		},
+		WithSystem("CALLER"),
+	)
+	require.NoError(t, err)
+
+	var found bool
+	for _, m := range trace.Messages {
+		if m.Message.Role == "system" && m.Message.Content[0].Text == "CALLER" {
+			found = true
+			assert.Equal(t, TraceSourceUser, m.Source)
+		}
+	}
+	assert.True(t, found, "caller system must be traced even when MaxTurns is 0")
+}
+
+// TestToolCallTrace_MultipleAndIdenticalCallerSystems: multiple caller systems,
+// including text identical to the SDK prompt, are each attributed correctly
+// without positional or text-based dedup.
+func TestToolCallTrace_MultipleAndIdenticalCallerSystems(t *testing.T) {
+	client := newToolLoopClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		require.NoError(t, json.NewEncoder(w).Encode(Response{
+			Choices: []Choice{{
+				Message:      Message{Role: "assistant", Content: []ContentPart{{Type: "text", Text: "done"}}},
+				FinishReason: "stop",
+			}},
+		}))
+	})
+
+	_, trace, err := client.ExecuteToolCallLoop(
+		context.Background(),
+		[]Message{{Role: "user", Content: []ContentPart{{Type: "text", Text: "go"}}}},
+		[]ToolDefinition{{Type: "function", Function: ToolFunction{Name: "lookup", Parameters: map[string]interface{}{"type": "object"}}}},
+		ToolCallConfig{MaxTurns: 1, MaxToolCalls: 1, SystemPrompt: "SHARED"},
+		func(_ context.Context, _ string, _ map[string]interface{}) (map[string]interface{}, error) {
+			return map[string]interface{}{"ok": true}, nil
+		},
+		WithSystem("SHARED"), // identical text to the SDK prompt
+		WithSystem("OTHER"),
+	)
+	require.NoError(t, err)
+
+	// One SDK-sourced "SHARED", plus two caller systems ("SHARED" and "OTHER").
+	sdkShared, callerShared, callerOther := 0, 0, 0
+	for _, m := range trace.Messages {
+		if m.Message.Role != "system" {
+			continue
+		}
+		text := m.Message.Content[0].Text
+		switch {
+		case text == "SHARED" && m.Source == TraceSourceToolSystemPrompt:
+			sdkShared++
+		case text == "SHARED" && m.Source == TraceSourceUser:
+			callerShared++
+		case text == "OTHER" && m.Source == TraceSourceUser:
+			callerOther++
+		}
+	}
+	assert.Equal(t, 1, sdkShared, "exactly one SHARED from the SDK prompt")
+	assert.Equal(t, 1, callerShared, "exactly one SHARED from the caller")
+	assert.Equal(t, 1, callerOther, "exactly one OTHER from the caller")
+}

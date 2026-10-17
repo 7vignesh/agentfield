@@ -207,54 +207,33 @@ func (c *Client) ExecuteToolCallLoopResult(
 	}
 	loopMessages := append([]Message(nil), messages...)
 
-	// Tag the caller-supplied messages as user content.
-	for i := range loopMessages {
-		trace.Messages = append(trace.Messages, TracedMessage{
-			Message: loopMessages[i],
-			Source:  TraceSourceUser,
-		})
+	// Build the first request once, recording the provenance of every message
+	// it carries. Each option runs exactly once (no replay), and provenance is
+	// derived by diffing the message list across staged applications rather than
+	// by message position or text, so identical text from different sources is
+	// still attributed correctly. Later turns reuse the plain builder.
+	firstReq, firstProvenance, err := c.buildTracedToolCallRequest(
+		loopMessages, tools, config.SystemPrompt, opts,
+	)
+	if err != nil {
+		return result, err
 	}
-	// The tool system prompt (config.SystemPrompt) is prepended to each request
-	// via WithSystem rather than kept in loopMessages, so record it once as an
-	// SDK-injected message when set.
-	if strings.TrimSpace(config.SystemPrompt) != "" {
-		trace.Messages = append(trace.Messages, TracedMessage{
-			Message: Message{
-				Role:    "system",
-				Content: []ContentPart{{Type: "text", Text: config.SystemPrompt}},
-			},
-			Source: TraceSourceToolSystemPrompt,
-		})
+	for i := range firstProvenance {
+		trace.Messages = append(trace.Messages, firstProvenance[i])
 	}
 
 	for turn := 0; turn < config.MaxTurns; turn++ {
 		trace.TotalTurns = turn + 1
 
-		req, err := c.buildToolCallRequest(loopMessages, tools, true, effectiveOpts)
-		if err != nil {
-			return result, err
-		}
-
-		// On the first turn, capture any system messages the caller injected via
-		// opts (e.g. WithSystem). They reach the model but are not in
-		// loopMessages, so read them from the real request rather than replaying
-		// options (replaying runs option side effects twice). The tool system
-		// prompt, when set, is prepended first and already traced above, so skip
-		// that leading entry.
+		// Turn 0 reuses the request already built for provenance capture so no
+		// option runs twice; later turns rebuild with the appended tool results.
+		var req *Request
 		if turn == 0 {
-			skipToolSystemPrompt := strings.TrimSpace(config.SystemPrompt) != ""
-			for _, msg := range req.Messages {
-				if msg.Role != "system" {
-					continue
-				}
-				if skipToolSystemPrompt {
-					skipToolSystemPrompt = false
-					continue
-				}
-				trace.Messages = append(trace.Messages, TracedMessage{
-					Message: msg,
-					Source:  TraceSourceUser,
-				})
+			req = firstReq
+		} else {
+			req, err = c.buildToolCallRequest(loopMessages, tools, true, effectiveOpts)
+			if err != nil {
+				return result, err
 			}
 		}
 
@@ -372,6 +351,81 @@ func (c *Client) ExecuteToolCallLoopResult(
 	trace.FinalResponse = resp.Text()
 	trace.TotalTurns = config.MaxTurns
 	return result, nil
+}
+
+// buildTracedToolCallRequest builds the first tool-call request and records the
+// provenance of every message it carries. It applies the SDK tool system
+// prompt and the caller's options in separate stages, diffing req.Messages
+// after each stage so each message is attributed to its real source without
+// relying on position or text, and each option runs exactly once.
+//
+// Message order in the result follows the SDK's own option application:
+// WithSystem prepends, so caller WithSystem options end up ahead of the SDK's
+// tool system prompt, which is ahead of the initial messages. Provenance is
+// returned in that same final order.
+func (c *Client) buildTracedToolCallRequest(
+	messages []Message,
+	tools []ToolDefinition,
+	systemPrompt string,
+	callerOpts []Option,
+) (*Request, []TracedMessage, error) {
+	// Stage 0: base request with the initial messages only.
+	req := &Request{
+		Messages:    append([]Message(nil), messages...),
+		Model:       c.config.Model,
+		Temperature: &c.config.Temperature,
+		MaxTokens:   &c.config.MaxTokens,
+		Tools:       tools,
+		ToolChoice:  "auto",
+	}
+	// provenance[i] is the source of req.Messages[i]; the initial messages are
+	// caller/user content.
+	provenance := make([]string, len(req.Messages))
+	for i := range provenance {
+		provenance[i] = TraceSourceUser
+	}
+
+	// applyStage runs one option against the request and labels whatever
+	// messages it prepended (WithSystem prepends, so new entries appear at the
+	// front) with the given source.
+	applyStage := func(opt Option, source string) error {
+		before := len(req.Messages)
+		if opt != nil {
+			if err := opt(req); err != nil {
+				return err
+			}
+		}
+		added := len(req.Messages) - before
+		if added > 0 {
+			newProv := make([]string, added)
+			for i := range newProv {
+				newProv[i] = source
+			}
+			provenance = append(newProv, provenance...)
+		}
+		return nil
+	}
+
+	// Stage 1: the SDK tool system prompt (prepended first, so it lands just
+	// ahead of the initial messages).
+	if strings.TrimSpace(systemPrompt) != "" {
+		if err := applyStage(WithSystem(systemPrompt), TraceSourceToolSystemPrompt); err != nil {
+			return nil, nil, fmt.Errorf("apply system prompt: %w", err)
+		}
+	}
+	// Stage 2: the caller's own options; any system message they add is caller
+	// content.
+	for _, opt := range callerOpts {
+		if err := applyStage(opt, TraceSourceUser); err != nil {
+			return nil, nil, fmt.Errorf("apply option: %w", err)
+		}
+	}
+
+	traced := make([]TracedMessage, len(req.Messages))
+	for i := range req.Messages {
+		traced[i] = TracedMessage{Message: req.Messages[i], Source: provenance[i]}
+	}
+	return req, traced, nil
 }
 
 func capabilityToTool(invocationTarget string, description *string, inputSchema map[string]interface{}) ToolDefinition {
