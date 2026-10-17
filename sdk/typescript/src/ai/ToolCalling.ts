@@ -649,26 +649,39 @@ function appendResponseMessages(
 }
 
 // toolSourceForMessage reads the tool-call id(s) from a tool-role message and
-// returns the provenance the wrapper recorded for it. When the message carries
-// an errored or limit-rejected call, that provenance wins over a plain result.
+// returns the provenance the wrapper recorded for it. When the wrapper has no
+// entry (the AI SDK generated the tool result itself, e.g. rejecting malformed
+// or schema-invalid arguments before execute ran), the message's own output
+// type classifies it: error-text / error-json are tool errors.
 function toolSourceForMessage(
   message: any,
   toolMessageSources?: Map<string, TracedMessage['source']>
 ): TracedMessage['source'] {
-  if (!toolMessageSources) {
-    return TRACE_SOURCE_TOOL_RESULT;
-  }
   const parts = Array.isArray(message?.content) ? message.content : [];
+  let sawNativeError = false;
   let fallback: TracedMessage['source'] = TRACE_SOURCE_TOOL_RESULT;
+
   for (const part of parts) {
     const id = part?.toolCallId;
-    if (id && toolMessageSources.has(id)) {
+    // Wrapper-recorded provenance wins (it knows result vs error vs limit).
+    if (id && toolMessageSources?.has(id)) {
       const recorded = toolMessageSources.get(id)!;
       if (recorded !== TRACE_SOURCE_TOOL_RESULT) {
         return recorded;
       }
       fallback = recorded;
+      continue;
     }
+    // No wrapper entry: the SDK produced this result itself. An error output
+    // type (error-text / error-json) means it rejected the call before execute.
+    const outputType = part?.output?.type ?? part?.type;
+    if (typeof outputType === 'string' && outputType.startsWith('error')) {
+      sawNativeError = true;
+    }
+  }
+
+  if (sawNativeError) {
+    return TRACE_SOURCE_TOOL_ERROR;
   }
   return fallback;
 }

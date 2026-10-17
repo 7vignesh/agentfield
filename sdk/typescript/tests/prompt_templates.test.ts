@@ -403,3 +403,93 @@ describe('buildToolConfig config detection', () => {
     expect(config.promptTemplates).toEqual({ toolCallLimitReached: 'stop' });
   });
 });
+
+describe('native SDK tool errors (no wrapper entry)', () => {
+  it('classifies an SDK-generated error-text tool result as sdk.tool_error', async () => {
+    // The AI SDK rejects malformed/schema-invalid args before execute runs, so
+    // no wrapper provenance exists; the error output type must classify it.
+    const agent = { call: vi.fn() } as any;
+
+    generateTextMock.mockReset();
+    generateTextMock.mockImplementationOnce(async () => ({
+      text: 'done',
+      steps: [],
+      response: {
+        messages: [
+          {
+            role: 'assistant',
+            content: [{ type: 'tool-call', toolCallId: 'c1', toolName: 'node__sum' }]
+          },
+          {
+            role: 'tool',
+            content: [
+              {
+                type: 'tool-result',
+                toolCallId: 'c1',
+                toolName: 'node__sum',
+                output: { type: 'error-text', value: 'invalid arguments' }
+              }
+            ]
+          },
+          { role: 'assistant', content: 'done' }
+        ]
+      }
+    }));
+
+    const result = await executeToolCallLoop(
+      agent,
+      'prompt',
+      toolMap,
+      { maxTurns: 2, maxToolCalls: 3 },
+      false,
+      () => ({ provider: 'mock' })
+    );
+
+    const toolMsg = (result.trace.messages ?? []).find(
+      (m) => (m.message as any).role === 'tool'
+    );
+    expect(toolMsg?.source).toBe(TRACE_SOURCE_TOOL_ERROR);
+    // agent.call never ran (the SDK rejected before execute).
+    expect(agent.call).not.toHaveBeenCalled();
+  });
+
+  it('keeps a successful result whose output contains an error field as a result', async () => {
+    const agent = { call: vi.fn() } as any;
+
+    generateTextMock.mockReset();
+    generateTextMock.mockImplementationOnce(async () => ({
+      text: 'done',
+      steps: [],
+      response: {
+        messages: [
+          {
+            role: 'tool',
+            content: [
+              {
+                type: 'tool-result',
+                toolCallId: 'c1',
+                toolName: 'node__sum',
+                // Successful business output that happens to carry an error key.
+                output: { type: 'json', value: { error: 'handled gracefully', ok: true } }
+              }
+            ]
+          }
+        ]
+      }
+    }));
+
+    const result = await executeToolCallLoop(
+      agent,
+      'prompt',
+      toolMap,
+      { maxTurns: 2, maxToolCalls: 3 },
+      false,
+      () => ({ provider: 'mock' })
+    );
+
+    const toolMsg = (result.trace.messages ?? []).find(
+      (m) => (m.message as any).role === 'tool'
+    );
+    expect(toolMsg?.source).toBe(TRACE_SOURCE_TOOL_RESULT);
+  });
+});
