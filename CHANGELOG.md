@@ -6,6 +6,138 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.142-rc.18] - 2026-10-19
+
+
+### Fixed
+
+- Fix(control-plane): validate agent endpoints and restrict control-plane-to-agent destinations (#1116)
+
+* feat(control-plane): add agent endpoint validation and outbound destination policy
+
+Introduce internal/agenturl, which owns how the control plane validates and
+reaches agent node endpoints:
+
+- Endpoint shape validation and normalization for base_url and
+  invocation_url: http/https only, host required, no userinfo, query,
+  fragment, whitespace/control characters, encoded separators or
+  dot-segments. A legitimate path prefix is kept.
+- Join(), which builds outbound URLs from a validated base plus
+  path-escaped segments instead of string concatenation.
+- A destination policy that always refuses link-local and cloud
+  instance-metadata addresses (including IPv4 embedded in IPv6 forms and
+  the well-known metadata hostnames), and an opt-in strict mode that also
+  refuses loopback and private ranges unless allowlisted.
+- An HTTP client/transport factory that checks every resolved address at
+  dial time and only follows same-origin redirects.
+
+New settings (default off / empty), documented in .env.example,
+config/agentfield.yaml and docs/ENVIRONMENT_VARIABLES.md:
+  registration.agent_endpoint_strict
+    (AGENTFIELD_REGISTRATION_AGENT_ENDPOINT_STRICT)
+  registration.agent_endpoint_allowed_hosts
+    (AGENTFIELD_REGISTRATION_AGENT_ENDPOINT_ALLOWED_HOSTS)
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(control-plane): validate agent endpoints at registration
+
+Generic and serverless node registration now run base_url and
+invocation_url through agenturl validation and the destination policy
+before anything is stored, and persist the normalized URL. Invalid
+endpoints are rejected with HTTP 400 naming the rule that failed.
+
+- invocation_url supplied in a generic register/re-register body gets the
+  same validation as base_url instead of being stored as-is.
+- Callback-discovery candidates are normalized with the same rules and
+  keep their path prefix.
+- Serverless discovery and execute endpoints are joined safely, and
+  dot-segment paths are rejected rather than silently cleaned.
+- Storage derives a missing serverless invocation URL with safe joining;
+  previously stored rows remain readable.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(control-plane): constrain execution dispatch to validated agent endpoints
+
+Execution (sync, async, restart retry) and the legacy reasoner/skill call
+routes now:
+
+- re-validate the stored base_url / invocation_url before dispatch and
+  refuse with a clear JSON error (no agent response body relayed) when a
+  stored endpoint no longer passes validation;
+- build the target URL with agenturl.Join, so reasoner and skill names are
+  path-escaped and names containing "/", "..", "?", "#" or encoded
+  separators cannot move the request outside <base>/reasoners/ or
+  <base>/skills/;
+- send through the agenturl client, which applies the destination policy
+  at dial time and does not follow cross-origin redirects.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(control-plane): apply the agent endpoint policy to logs, status and lifecycle traffic
+
+Every other control-plane request to an agent node now uses the same
+validation, safe joining and policy-checked client:
+
+- UI node logs proxy: joins <base>/agentfield/v1/logs with url.URL and
+  encodes caller parameters with url.Values, keeping its connect and
+  stream limits.
+- Node status and shutdown (also used by the health monitor, status
+  manager and UI service), UI lifecycle endpoint advertisement, trigger
+  dispatch, cancel dispatch, and the local node lifecycle HTTP client.
+
+Upgrade path: nodes stored before this change with an endpoint that no
+longer validates still load, list and survive server start; requests to
+them are refused with a clear error and a once-per-node warning, and
+re-registering with a valid URL fixes them.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(agenturl): share the connect budget across resolved addresses; let CIDR exceptions match localhost
+
+- Dial each checked address with a share of the remaining connect
+  deadline, so a stalled first address (e.g. an unreachable IPv6 answer)
+  no longer consumes the whole budget before a working fallback is tried.
+- In strict mode, a CIDR exception now applies to localhost after
+  resolution instead of the name being refused up front, so allowlisting
+  127.0.0.0/8 and ::1/128 works for localhost agents and for the control
+  plane's managed local node probes. The always-on deny is still checked
+  first.
+- Add a server-level test proving startup applies the configured strict
+  mode and allowlist, and check response-write errors in the new tests.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(control-plane): bound registration DNS checks and keep invocation-only nodes dispatchable
+
+- Registration validates each normalized endpoint once per request using
+  the request context, stops DNS checks once a callback candidate is
+  selected, and keeps "DNS not ready yet" a warning rather than an error.
+  A registration with slow-resolving extra candidates no longer waits on
+  each of them in turn, and a disconnected caller cancels the lookups.
+- Execution validates the endpoint it actually uses: a node registered
+  with a valid invocation_url and no base_url dispatches again, as it did
+  before. Logs, status/shutdown, lifecycle, trigger and cancel keep their
+  previous behaviour for an empty base_url.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* test(handlers): inject the dial failure in the unbuildable-retry-URL test
+
+The test used a bound-then-closed loopback port to simulate a dead agent.
+On some hosts (seen on WSL2, also on main) connecting to that port
+intermittently yields a read reset instead of a dial error, so the retry
+path under test was never reached. Inject the dial failure through the
+existing round-tripper fixture instead; the assertion is unchanged and the
+invalid retry URL is additionally asserted never to reach the transport.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com> (f077154)
+
 ## [0.1.142-rc.17] - 2026-10-19
 
 
