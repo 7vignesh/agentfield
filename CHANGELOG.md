@@ -6,6 +6,83 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.142-rc.16] - 2026-10-19
+
+
+### Fixed
+
+- Fix(control-plane): enforce memory authorization on the scope each request accesses (#1117)
+
+* fix(control-plane): authorize memory requests against the scope they access
+
+With memory authorization enabled, MemoryPermissionMiddleware skipped scope
+ownership and tag policy when no caller identity resolved, and it validated
+a scope inferred from headers while the handlers used the body/query scope,
+a hierarchical walk, or (events) unfiltered subscriptions. Any API-key
+holder could read, overwrite or delete another agent's actor scope, and
+event streams/history delivered every scope's data.
+
+The middleware now resolves identity (a verified DID is authoritative and
+never falls back to identity headers), evaluates memory tag policies on
+every scope, and installs a request-scoped authorizer. Handlers authorize
+the exact (scope, scope_id) they pass to storage before any storage access:
+
+- non-global scopes require a caller identity (memory_identity_required);
+- unknown scope names are denied;
+- actor ids that equal, or are colon-prefix related to, another registered
+  node id are denied, because local storage keys are "<scope_id>:<key>";
+  persona/user actor ids keep working;
+- session/workflow ids stay selectors for identified callers, including
+  the empty id that released SDKs probe during hierarchical reads;
+- hierarchical reads skip scopes the caller may not read.
+
+Concrete event selectors are authorized before the websocket upgrade/SSE
+headers and re-authorized per event. Wildcard streams/history deliver only
+global, own-actor and participated (stored execution) scopes; live streams
+cache positive decisions only, with rate-limited lookups.
+
+Startup logs warn that identity headers are client-asserted when DID
+request authentication is off, and when authorization is enabled but the
+memory middleware cannot be installed. Behavior with authorization
+disabled is unchanged.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(sdk/typescript): send the API key and agent identity on memory requests
+
+The agent built its MemoryClient and MemoryEventClient from defaultHeaders
+only, so memory calls never carried the configured API key (they fail with
+401 against an API-key-protected control plane unless the key is repeated
+in defaultHeaders), and the memory events websocket and history requests
+never carried X-Agent-Node-ID, so the control plane treated them as
+anonymous. Pass the API key to both memory clients and the node id to the
+event client; explicit defaultHeaders keep precedence.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(sdk/typescript): do not follow redirects on memory requests
+
+Memory requests now carry the API key and caller identity. follow-redirects
+strips Authorization and Cookie across hosts but keeps X-API-Key, so a
+redirect could replay the key and memory payloads to another origin. Memory
+API routes never redirect, so the memory clients no longer follow
+redirects at all (which also holds behind HTTP proxies).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* docs: describe memory authorization rules
+
+Document how memory authorization resolves the caller, the per-scope
+rules, event stream visibility, tag policies on every scope, the error
+codes, and that identity headers are client-asserted unless DID request
+authentication is used.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com> (c53dfb9)
+
 ## [0.1.142-rc.15] - 2026-10-19
 
 
