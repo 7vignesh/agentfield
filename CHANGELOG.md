@@ -6,6 +6,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.142-rc.20] - 2026-10-19
+
+
+### Fixed
+
+- Fix(control-plane): refuse IPv4-embedding and special-use ranges in the webhook URL guard (#1122)
+
+isPrivateIP, shared by ValidateWebhookURL and the NewSSRFSafeClient dial
+hook, treated IPv6 addresses that embed an IPv4 address as public. Refuse
+NAT64 (64:ff9b::/96, 64:ff9b:1::/48), 6to4 (2002::/16), Teredo (2001::/32),
+IPv4-compatible (::/96) and IPv4-translated (::ffff:0:0:0/96) addresses,
+normalize IPv4-in-IPv6 forms before the IPv4 checks, and refuse the
+remaining special-use ranges (0.0.0.0/8, 100.64.0.0/10, 192.0.0.0/29,
+198.18.0.0/15, 240.0.0.0/4, fec0::/10, 2001:2::/48) plus anything that is
+not global unicast. The webhook allowlist still applies, and an IPv4 CIDR
+entry does not implicitly allow a transition address.
+
+Tests cover every registration path (execute webhooks, observability
+webhook, approval callback), refusal at connect time, a redirect to a
+NAT64 address, a hostname resolving to loopback, and delivery to permitted
+targets.
+
+Reported-by: tonghuaroot
+
+Co-authored-by: Claude Opus 5.5 (1M context) <noreply@anthropic.com> (78398d0)
+
 ## [0.1.142-rc.19] - 2026-10-19
 
 
