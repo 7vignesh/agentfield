@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.142-rc.15] - 2026-10-19
+
+
+### Testing
+
+- Test(sdk/python): drop the stale enable_mcp kwarg from Agent fixtures (#1120)
+
+FastAPI 0.148.0 (released 2026-10-19) no longer accepts unknown keyword
+arguments in FastAPI.__init__. Agent forwards its extra kwargs to FastAPI,
+and six tests still passed enable_mcp=False, an Agent parameter that no
+longer exists, so they now fail with a TypeError and break the sdk-python
+coverage job on every PR.
+
+Co-authored-by: Claude Opus 5.5 (1M context) <noreply@anthropic.com> (8aa3aba)
+
 ## [0.1.142-rc.14] - 2026-10-17
 
 
