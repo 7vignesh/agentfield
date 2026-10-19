@@ -6,6 +6,152 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.143-rc.1] - 2026-10-19
+
+
+### Added
+
+- Feat(examples): add optional Keenable search backend to deep_research (#1110)
+
+Adds `SEARCH_PROVIDER=keenable` alongside the Tavily default and the
+Parallel and Serply opt-ins, in the same shape as the Serply backend:
+one normalizer, one error message builder, one async executor, one
+dispatch branch, and no new entry in requirements.txt.
+
+Keenable needs no account or key. Without KEENABLE_API_KEY the backend
+posts to the public endpoint, which only requires an X-Keenable-Title
+header naming the caller. With the key set it posts to the keyed
+endpoint with X-API-Key, which lifts the keyless rate limit.
+
+- Each query asks for five results, level with the Tavily path.
+- The result text is read from `snippet`, with `description` only as a
+  fallback, and mapped into the existing {title, url, content,
+  raw_content} rows.
+- Errors arrive as a non-2xx with a JSON `message`, so the failure
+  message carries that text instead of a bare status code. (92dcfa6)
+
+
+
+### Chores
+
+- Chore(deps): patch npm Dependabot advisories (brace-expansion, http-cache-semantics, fast-uri, undici) (#1095)
+
+* chore(deps): bump npm transitive floors for Dependabot advisories
+
+Raise package overrides to patched releases for brace-expansion
+(1.1.21 / 2.1.7 / 5.0.12), http-cache-semantics 4.3.0, fast-uri 3.1.8,
+and undici 6.29.0 across the web client, desktop, and mastra-bench
+lockfiles.
+
+Note: braces remains at 3.0.3 with no upstream patched release yet
+(CVE-2026-93687 / GHSA-vfj7-8cjw-p6xm).
+
+Co-authored-by: instrument.santosh <instrument.santosh@gmail.com>
+
+* fix(sdk-python): cap litellm below 1.104 for langfuse v2 canary
+
+LiteLLM 1.104.0 requires langfuse>=4.7 for the standard langfuse
+callback, which breaks the v2 canary exercised by coverage after any
+control-plane change. Cap the 3.11+ floor at <1.104.0 until the
+langfuse extra migrates to v4 / langfuse_otel.
+
+Co-authored-by: instrument.santosh <instrument.santosh@gmail.com>
+
+* chore(deps): refresh patched npm security floors
+
+Cover all currently patchable npm alerts in web, desktop, SDK, and examples. Keep no-release braces and sprintf-js advisories explicit; also clear the audited tar and diff advisories with major-scoped patch overrides.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Cursor Agent <cursoragent@cursor.com>
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com>
+Co-authored-by: Claude Opus 5.5 (1M context) <noreply@anthropic.com> (c794b4e)
+
+- Chore(deps): bump the uv group across 1 directory with 2 updates (#1103)
+
+Bumps the uv group with 2 updates in the /sdk/python directory: [fsspec](https://github.com/fsspec/filesystem_spec) and [multidict](https://github.com/aio-libs/multidict).
+
+
+Updates `fsspec` from 2026.3.0 to 2026.6.0
+- [Commits](https://github.com/fsspec/filesystem_spec/compare/2026.3.0...2026.6.0)
+
+Updates `multidict` from 6.7.1 to 6.9.1
+- [Release notes](https://github.com/aio-libs/multidict/releases)
+- [Changelog](https://github.com/aio-libs/multidict/blob/master/CHANGES.rst)
+- [Commits](https://github.com/aio-libs/multidict/compare/v6.7.1...v6.9.1)
+
+---
+updated-dependencies:
+- dependency-name: fsspec
+  dependency-version: 2026.6.0
+  dependency-type: indirect
+  dependency-group: uv
+- dependency-name: multidict
+  dependency-version: 6.9.1
+  dependency-type: indirect
+  dependency-group: uv
+...
+
+Signed-off-by: dependabot[bot] <support@github.com>
+Co-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com> (0ab945c)
+
+
+
+### Fixed
+
+- Fix(sdk): stop harness retries triggered by prompt text in timeout errors (#1104)
+
+* fix(harness): keep prompt text out of transient retry classification
+
+A wall-clock timeout message embedded the full command line, and providers
+pass the prompt as an argv element. The runner's transient-error classifier
+matches error text, so prompt prose ("its coded 500 would fall through the
+global filter") made a 90-minute opencode timeout look like a transient
+server error and the whole call was re-run from scratch (the replacement
+process started one second after the cap, the first-retry backoff).
+
+- _cli.format_command_preview bounds the argv quoted into timeout/crash
+  messages to whole arguments fitting ~200 chars. An oversized element (the
+  positional prompt) is dropped entirely, so prompt text never reaches the
+  classifier. Used by both timeout messages and the overflow warning log.
+- _runner._is_transient rejects FailureType.TIMEOUT outright, so a declared
+  timeout stays non-retryable regardless of message text.
+- TRANSIENT_PATTERNS drops bare 500/502/503/504. Status codes now match only
+  with HTTP/status/code context ("http 503", "status: 502", "error code 429"),
+  normalizing ':'/'=' and whitespace; 408/429 are covered the same way.
+  Textual phrases (service unavailable, bad gateway, gateway timeout,
+  internal server error, too many requests) and the existing rate-limit and
+  connection phrases behave as before.
+
+Tests cover prompt-in-timeout classification, timeouts staying terminal,
+transport failures still retrying, and the bounded provider message from
+run_cli and OpenCodeProvider.
+
+* no-mistakes(review): Restore upstream transient retry classifier, keep command preview guard
+
+* no-mistakes(review): Omit command arguments from timeout error messages
+
+* no-mistakes(document): No documentation or lint fixes needed
+
+* fix(sdk): stop harness retries triggered by prompt text in timeout errors
+
+Go's harness error messages joined the full command line, and providers pass the prompt as an argv element (opencode on POSIX, gemini, cursor). The runner's transient-error classifier reads those messages, so a prompt such as "return 500 error" made a no-progress error look transient and the call was retried.
+
+formatCommandPreview now names the executable and the number of omitted arguments in the no-progress and timeout errors, matching the Python helper already on this branch. The transient pattern list and the retry flow are untouched, and an "Error 503" still retries. Go wall-clock timeouts already retry because "timeout" and "timed out" are in the pattern list, so the leak only changed the no-progress outcome.
+
+* test(harness): make timeout redaction tests independent of temp paths
+
+Compare exact command previews and use a controlled runner executable so temporary paths containing 500 do not create misleading failures.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com>
+Co-authored-by: Claude Opus 5.5 (1M context) <noreply@anthropic.com> (f3e284a)
+
 ## [0.1.142] - 2026-10-19
 
 ## [0.1.142-rc.20] - 2026-10-19
