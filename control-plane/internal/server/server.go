@@ -3,8 +3,6 @@ package server
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -315,8 +313,13 @@ func NewAgentFieldServer(cfg *config.Config) (*AgentFieldServer, error) {
 			return nil, fmt.Errorf("failed to initialize VC service: %w", err)
 		}
 
-		// Generate af server ID based on agentfield home directory
-		agentfieldServerID := generateAgentFieldServerID(agentfieldHome)
+		// Pick the stored server identity this control plane owns. Moving
+		// AGENTFIELD_HOME must not silently create a new identity.
+		agentfieldServerID, err := services.SelectAgentFieldServerID(
+			didRegistry, cfg.Features.DID.ServerID, generateAgentFieldServerID(agentfieldHome))
+		if err != nil {
+			return nil, fmt.Errorf("failed to select af server DID registry: %w", err)
+		}
 
 		// Initialize af server DID with dynamic ID
 		fmt.Printf("🧠 Initializing af server DID (ID: %s)...\n", agentfieldServerID)
@@ -1192,22 +1195,10 @@ func (s *AgentFieldServer) initRateLimiters() {
 
 var absPathForServerID = filepath.Abs
 
-// generateAgentFieldServerID creates a deterministic af server ID based on the agentfield home directory.
-// This ensures each agentfield instance has a unique ID while being deterministic for the same installation.
+// generateAgentFieldServerID returns the af server ID derived from the
+// agentfield home directory. It names a new registry and finds one created at
+// the same home path; SelectAgentFieldServerID decides which stored registry
+// is used.
 func generateAgentFieldServerID(agentfieldHome string) string {
-	// Use the absolute path of agentfield home to generate a deterministic ID
-	absPath, err := absPathForServerID(agentfieldHome)
-	if err != nil {
-		// Fallback to the original path if absolute path fails
-		absPath = agentfieldHome
-	}
-
-	// Create a hash of the agentfield home path to generate a unique but deterministic ID
-	hash := sha256.Sum256([]byte(absPath))
-
-	// Use first 16 characters of the hex hash as the af server ID
-	// This provides uniqueness while keeping the ID manageable
-	agentfieldServerID := hex.EncodeToString(hash[:])[:16]
-
-	return agentfieldServerID
+	return services.LegacyAgentFieldServerID(agentfieldHome, absPathForServerID)
 }
