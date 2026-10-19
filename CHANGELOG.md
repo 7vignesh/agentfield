@@ -6,6 +6,64 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.142-rc.19] - 2026-10-19
+
+
+### Fixed
+
+- Fix(control-plane): run session tool calls through the execute pipeline in-process (#1121)
+
+* test(control-plane): add a reset hook for the process-wide async worker pool
+
+Server Stop retires the process-wide async execution pool for the rest of
+the process. Tests outside the handlers package that run async executions
+in the same test binary as a Stop call need a fresh pool to stay order
+independent; ResetAsyncWorkerPoolForTesting drains the current pool and
+lets the next async execution start a new one.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(control-plane): run session tool calls through the execute pipeline in-process
+
+POST /api/v1/session-instances/:session_id/tools/:tool re-sent each call
+over HTTP to the control plane's own /api/v1/execute/async/:target. The
+URL of that second request was built from the incoming request's Host
+header, and the request carried the configured internal authorization
+token and copied caller headers.
+
+The route no longer makes an HTTP request. A small middleware validates
+the tool call as before, rewrites it into an execute request ({"input":
+...}, X-Session-ID from the path, the resolved <node>.<reasoner> as the
+target route param, replay-control headers dropped as before), and the
+route then runs the same execute rate limiter, permission check and
+async execute handler as /api/v1/execute/async/:target. The execute
+middleware list is built once and shared by both routes.
+
+Side effects of removing the hop: callers authenticating with
+"Authorization: Bearer <api key>" no longer get 401 when an internal
+token is configured, DID-signed callers are evaluated with their
+verified DID instead of being rejected, and rate limiting and policy
+evaluation see the original caller once.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(control-plane): apply the execute body limit to session tool calls
+
+Session tool calls used to hit the execute body limit
+(AGENTFIELD_MAX_EXECUTE_BODY_BYTES, default 32 MiB) when the forwarded
+request re-entered /api/v1/execute/. Now that they run the execute
+pipeline in-process, apply the same limit to POSTs under
+/api/v1/session-instances/. The whole prefix is matched so path variants
+gin still routes to the tool handler, such as an empty session id, are
+covered; the only other route there, realtime-offer, takes a small SDP
+body.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com> (17abda7)
+
 ## [0.1.142-rc.18] - 2026-10-19
 
 
