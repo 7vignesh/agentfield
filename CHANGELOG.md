@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.143-rc.2] - 2026-10-20
+
+
+### Fixed
+
+- Fix(sdk/python): parse remaining boolean env flags with the SDK-wide vocabulary (#1089) (#1123) (a053d68)
+
 ## [0.1.143-rc.1] - 2026-10-19
 
 
