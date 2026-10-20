@@ -498,3 +498,15 @@ async def test_trace_tags_schema_instruction_via_message_sources():
     tagged = [m.source for m in trace.messages]
     assert TRACE_SOURCE_SCHEMA_INSTRUCTION in tagged
     assert tagged[0] == TRACE_SOURCE_SCHEMA_INSTRUCTION
+
+
+def test_aiconfig_model_json_schema_does_not_raise():
+    # The Callable formatter fields are SkipJsonSchema-wrapped, so generating a
+    # JSON schema from AIConfig (e.g. taking it as a reasoner input) works
+    # instead of raising PydanticInvalidForJsonSchema (review #1092).
+    from agentfield.types import AIConfig
+
+    schema = AIConfig.model_json_schema()
+    assert isinstance(schema, dict)
+    # PromptTemplates is a nested field; its own schema generates too.
+    assert PromptTemplates.model_json_schema()

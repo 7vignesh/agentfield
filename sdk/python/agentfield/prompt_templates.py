@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic.json_schema import SkipJsonSchema
 
 # The schema-adherence instruction appended to the system message when a
 # Pydantic output schema is in effect. ``{schema}`` is replaced (via
@@ -111,7 +112,7 @@ class PromptTemplates(BaseModel):
         description="Message returned to the model when the tool-call limit is hit.",
     )
 
-    tool_error_formatter: Callable[[str, str], Any] = Field(
+    tool_error_formatter: SkipJsonSchema[Callable[[str, str], Any]] = Field(
         default=default_tool_error_formatter,
         exclude=True,
         description=(
@@ -121,7 +122,7 @@ class PromptTemplates(BaseModel):
         ),
     )
 
-    tool_result_formatter: Callable[[str, Any], Any] = Field(
+    tool_result_formatter: SkipJsonSchema[Callable[[str, Any], Any]] = Field(
         default=default_tool_result_formatter,
         exclude=True,
         description=(
