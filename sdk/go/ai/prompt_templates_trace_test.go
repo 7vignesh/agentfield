@@ -389,3 +389,92 @@ func TestToolCallTrace_MultipleAndIdenticalCallerSystems(t *testing.T) {
 	assert.Equal(t, 1, callerShared, "exactly one SHARED from the caller")
 	assert.Equal(t, 1, callerOther, "exactly one OTHER from the caller")
 }
+
+// TestToolCallTrace_AppendingOptionProvenance covers the review case where a
+// caller option appends (not prepends) a system message. Wire order is
+// SDK, user, CALLER, and each must keep its correct source rather than swapping
+// by position.
+func TestToolCallTrace_AppendingOptionProvenance(t *testing.T) {
+	client := newToolLoopClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		require.NoError(t, json.NewEncoder(w).Encode(Response{
+			Choices: []Choice{{
+				Message:      Message{Role: "assistant", Content: []ContentPart{{Type: "text", Text: "done"}}},
+				FinishReason: "stop",
+			}},
+		}))
+	})
+
+	appendSystem := func(text string) Option {
+		return func(r *Request) error {
+			r.Messages = append(r.Messages, Message{
+				Role:    "system",
+				Content: []ContentPart{{Type: "text", Text: text}},
+			})
+			return nil
+		}
+	}
+
+	_, trace, err := client.ExecuteToolCallLoop(
+		context.Background(),
+		[]Message{{Role: "user", Content: []ContentPart{{Type: "text", Text: "go"}}}},
+		[]ToolDefinition{{Type: "function", Function: ToolFunction{Name: "lookup", Parameters: map[string]interface{}{"type": "object"}}}},
+		ToolCallConfig{MaxTurns: 1, MaxToolCalls: 1, SystemPrompt: "SDK"},
+		func(_ context.Context, _ string, _ map[string]interface{}) (map[string]interface{}, error) {
+			return map[string]interface{}{"ok": true}, nil
+		},
+		appendSystem("CALLER"),
+	)
+	require.NoError(t, err)
+
+	byText := map[string]string{}
+	for _, m := range trace.Messages {
+		if m.Message.Role == "system" {
+			byText[m.Message.Content[0].Text] = m.Source
+		}
+	}
+	assert.Equal(t, TraceSourceToolSystemPrompt, byText["SDK"])
+	assert.Equal(t, TraceSourceUser, byText["CALLER"])
+}
+
+// TestToolCallTrace_MaxTurnsZeroDoesNotReplayOptions: the zero-turn path sends
+// exactly one request, so an option that mutates state (MaxTokens++) must be
+// applied once, not twice.
+func TestToolCallTrace_MaxTurnsZeroDoesNotReplayOptions(t *testing.T) {
+	var sawMaxTokens int
+	client := newToolLoopClient(t, func(w http.ResponseWriter, r *http.Request) {
+		var req Request
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+		if req.MaxTokens != nil {
+			sawMaxTokens = *req.MaxTokens
+		}
+		require.NoError(t, json.NewEncoder(w).Encode(Response{
+			Choices: []Choice{{
+				Message:      Message{Role: "assistant", Content: []ContentPart{{Type: "text", Text: "done"}}},
+				FinishReason: "stop",
+			}},
+		}))
+	})
+
+	incMaxTokens := func(r *Request) error {
+		if r.MaxTokens != nil {
+			v := *r.MaxTokens + 1
+			r.MaxTokens = &v
+		}
+		return nil
+	}
+
+	_, _, err := client.ExecuteToolCallLoop(
+		context.Background(),
+		[]Message{{Role: "user", Content: []ContentPart{{Type: "text", Text: "go"}}}},
+		[]ToolDefinition{{Type: "function", Function: ToolFunction{Name: "lookup", Parameters: map[string]interface{}{"type": "object"}}}},
+		ToolCallConfig{MaxTurns: 0, MaxToolCalls: 1},
+		func(_ context.Context, _ string, _ map[string]interface{}) (map[string]interface{}, error) {
+			return map[string]interface{}{"ok": true}, nil
+		},
+		incMaxTokens,
+	)
+	require.NoError(t, err)
+	// The option ran once: base MaxTokens + 1. Running twice would be +2.
+	defaultMax := 0 // client default MaxTokens is 0 unless configured
+	assert.Equal(t, defaultMax+1, sawMaxTokens, "option must apply exactly once for the single request")
+}
