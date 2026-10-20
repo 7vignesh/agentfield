@@ -6,6 +6,267 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.143-rc.4] - 2026-10-20
+
+
+### Added
+
+- Feat: configurable PromptTemplates layer across Python/TS/Go SDKs (#229) (#1092)
+
+* feat(python-sdk): add configurable PromptTemplates layer
+
+Centralizes the text and tool-message framing the SDK injects into LLM
+calls (issue #229) into an overridable PromptTemplates on AIConfig.
+Defaults reproduce the prior output byte-for-byte; golden tests pin it.
+
+- prompt_templates.py: PromptTemplates pydantic model with
+  schema_instruction, tool_system_prompt (defaults to None so existing
+  tools= calls are unchanged), tool_call_limit_reached, and
+  tool_error_formatter / tool_result_formatter callables. __deepcopy__
+  returns model_copy() so a formatter that is a bound method on a
+  lock-holding object does not break ai()'s per-call deep copy; callable
+  fields are exclude=True so model_dump_json() keeps working. Also
+  defines TracedMessage and the cross-SDK source taxonomy.
+- types.py: prompt_templates field on AIConfig.
+- agent_ai.py: schema instruction now rendered via the template with
+  str.replace (safe with literal braces); None drops it and keeps the
+  native response_format. Opt-in tool_system_prompt appended after the
+  user system prompt.
+- tool_calling.py: tool-limit, result, and error messages routed through
+  the templates (formatters keep quotes valid JSON); each sent message
+  tagged on trace.messages with its source.
+- Exported PromptTemplates and TracedMessage from the package.
+
+* feat(ts-sdk): add configurable PromptTemplates layer
+
+TypeScript parity for issue #229. Adds a PromptTemplates interface and
+resolvePromptTemplates (merge-over-defaults) covering the tool system
+prompt, tool-call-limit message, and tool error/result formatters, with
+the Go-aligned field names. There is no schemaInstruction field: the TS
+SDK uses the Vercel AI SDK's native generateObject and injects no schema
+text.
+
+- PromptTemplates.ts: the interface, defaults, resolver, TracedMessage,
+  and the cross-SDK source taxonomy.
+- types/agent.ts: promptTemplates on AIConfig (Partial, merged per call).
+- AIClient.ts: promptTemplates getter; ReasonerContext carries it into
+  the loop config.
+- ToolCalling.ts: the three injection points route through the resolved
+  templates; the opt-in toolSystemPrompt is appended after the caller
+  system prompt; each sent message is tagged on trace.messages
+  (optional, additive).
+- Exported from the public index.
+
+Defaults are byte-for-byte unchanged, verified against the existing
+tool-calling tests plus new override and trace-tagging tests.
+
+* feat(go-sdk): tag tool-call trace messages by source
+
+Go already centralized tool-message framing in PromptConfig (#229). This
+adds the cross-SDK trace tagging: a TracedMessage type and a Messages
+field on ToolCallTrace, tagged json:",omitempty" so existing callers
+that marshal a trace do not start seeing "Messages":null.
+
+The loop tags each message it sends (user, assistant, sdk.tool_result,
+sdk.tool_error, sdk.tool_limit, sdk.tool_system_prompt) using the same
+source strings as the Python and TypeScript SDKs. Messages hold a
+reference to the wire message, not a reshaped copy.
+
+* docs: add Customizing SDK prompts guide
+
+Documents the PromptTemplates / PromptConfig surface across the three
+SDKs (#229), including the intentional schema-enforcement divergence
+(Python injects a schema instruction; TypeScript and Go use native
+structured output) and the shared trace message-source taxonomy.
+
+* fix(python-sdk): match pydantic __deepcopy__ signature for mypy
+
+The mypy ratchet (#971) flagged PromptTemplates.__deepcopy__ as an
+incompatible override: pydantic's BaseModel declares it as
+(self, memo: dict[int, Any] | None = None) -> Self. Align the memo
+parameter (optional, defaulted) so the override is compatible.
+
+* fix(python-sdk): tolerate configs without prompt_templates
+
+Existing tests use lightweight config doubles (DummyAIConfig,
+_DeadlockTestConfig) that lack the new field. ai() now resolves
+prompt_templates via getattr with a default PromptTemplates() fallback,
+so partial or custom configs keep working. The real AIConfig always has
+the field.
+
+* fix(python-sdk): address #1092 review (encoding, None/empty, traces)
+
+- Default tool-result encoding is byte-for-byte again: format_tool_result
+  with the default formatter re-applies json.dumps(result, default=str),
+  so a bare string result stays JSON-quoted ('hello' -> "hello")
+  instead of being sent verbatim. A custom formatter returning a string
+  still sends it verbatim. Same for the default error formatter.
+- None and empty normalize consistently via field validators plus
+  validate_assignment, so None/empty tool_call_limit_reached and
+  None formatters fall back to defaults on both construction and direct
+  mutation (previously None after assignment raised TypeError in
+  formatting). schema_instruction/tool_system_prompt keep None=omit.
+- Trace tagging now also captures the initial user and SDK-injected
+  system messages, not just loop output.
+- Added golden tests for quotes/newlines, construction+mutation
+  normalization, custom-formatter verbatim, and user/system tagging.
+
+* fix(ts-sdk): address #1092 review (trace completeness, config detection)
+
+- Trace now captures the user prompt, the SDK-injected tool system
+  prompt, the final assistant message, and complete tool messages
+  (role + toolName + content) instead of raw tool outputs.
+- isToolCallConfig recognizes a promptTemplates-only object, so
+  tools: { promptTemplates: {...} } runs discovery instead of being
+  misread as a raw tool map. Added a regression test.
+- Updated the existing lazy-hydration trace assertion and the
+  nothing-injected test for the now-always-present user/assistant tags.
+
+* fix(python-sdk): preserve message provenance in traces (#1092 review)
+
+ai() now threads per-message provenance into the loop via message_sources,
+so a schema-instruction system message is tagged sdk.schema_instruction
+(previously everything with role=system was inferred as the tool system
+prompt, and sdk.schema_instruction was never emitted). A caller-only
+system message is tagged user; the tool system prompt stays
+sdk.tool_system_prompt. Added a provenance test.
+
+* fix(ts-sdk): empty-limit fallback and accurate trace from response.messages
+
+- resolvePromptTemplates restores the default for an empty-string
+  toolCallLimitReached (?? only guarded null/undefined), so an empty
+  override never sends { error: '' }. Added a through-the-loop test.
+- Trace now tags the actual conversation from result.response.messages
+  (assistant turns, their tool-call requests, tool results with
+  toolCallId, in order) instead of hand-built synthetic entries, plus
+  the user prompt and injected system prompt up front.
+
+* fix(go-sdk): trace caller system text from options (#1092 review)
+
+A caller supplying their own system message via WithSystem reached the
+model but was absent from the trace. The loop now probes the caller's
+options and tags any system messages they inject as caller/user content,
+alongside the already-traced tool system prompt. Added a test.
+
+* test(python-sdk): tolerate message_sources in loop test double
+
+The deadlock-recovery test monkeypatches execute_tool_call_loop with a
+fixed-signature fake. ai() now passes the new optional message_sources
+kwarg, so the fake accepts **_kwargs to stay compatible with the
+extended signature.
+
+* fix(go-sdk): capture caller system provenance without replaying options
+
+Review #1092 found systemMessagesFromOptions re-executed every caller
+option against a probe request, running their side effects twice (and
+panicking on an option that reads the initialized MaxTokens). Removed
+the probe; the loop now reads caller-injected system messages from the
+real first request (skipping the already-traced tool system prompt).
+Added a test asserting a caller option is applied exactly once.
+
+* fix(ts-sdk): complete trace coverage and tool-message provenance
+
+Review #1092 round 3:
+- Caller-only system text (options.system with no tool system prompt) is
+  now tagged as user content, not dropped.
+- Tool-role messages keep their real provenance: the wrapper records
+  result/error/limit by tool-call id, and the trace built from
+  response.messages tags each accordingly instead of all sdk.tool_result.
+- The lazy-selection pass's conversation is retained when tools are
+  selected (both model passes now appear), not only when none are.
+- Added regression tests for error and limit provenance, caller-only
+  system tagging, and the empty-limit loop case.
+
+* fix(go-sdk): position-free system-message provenance (#1092 review)
+
+The prior fix mis-attributed system messages: WithSystem prepends, so the
+real order is caller, SDK, initial, but the skip-first-system logic
+dropped the caller message and double-counted the SDK prompt; an initial
+system message was also traced twice, and MaxTurns:0 traced nothing.
+
+Replaced it with buildTracedToolCallRequest, which builds the first
+request once and records provenance by diffing req.Messages across
+staged option application (SDK prompt, then caller opts). Each option
+runs exactly once, nothing is identified by position or deduplicated by
+text, and the first request is reused for turn 0. Provenance is captured
+before the loop, so MaxTurns:0 is covered too.
+
+Tests: caller+SDK ordering with single correct sources, initial system
+traced once, MaxTurns:0, and multiple/identical caller systems.
+
+* fix(ts-sdk): classify SDK-generated tool errors (#1092 review)
+
+When the AI SDK rejects malformed or schema-invalid tool arguments
+before execute runs, it emits a tool result with no wrapper provenance
+entry, which was tagged sdk.tool_result. toolSourceForMessage now falls
+back to the message's output type: an error-text / error-json output is
+tagged sdk.tool_error, retaining the original message, tool-call id and
+order. Wrapper-recorded provenance (execution error, limit) still wins.
+A successful business output that merely contains an 'error' field stays
+a result, since classification keys off the SDK's output type, not keys.
+
+Tests: SDK native error classification and the error-field-in-success
+guard.
+
+* fix(python-sdk): keep AIConfig JSON-schema generation working
+
+AbirAbbas review: the two Callable formatter fields made
+AIConfig.model_json_schema() raise PydanticInvalidForJsonSchema, which
+breaks anyone generating a schema from AIConfig or taking it as a
+reasoner input (exclude=True hides them from serialization but not
+schema generation). Wrapped both with SkipJsonSchema[...]. Added a
+model_json_schema regression test.
+
+* fix(go-sdk): send one request and attribute provenance without replay
+
+AbirAbbas review found the prior trace fix still (1) built firstReq with
+options applied and then built a second request for the zero-turn and
+final-call paths, running options twice and losing main's cross-turn
+message-state behavior, and (2) inferred provenance from a length delta,
+which assumed options prepend and mis-tagged an appending option.
+
+- The loop now builds only the request it actually sends; provenance is
+  captured once from that request via captureProvenance, including on the
+  MaxTurns:0 and limit-reached final-call paths. No throwaway request, no
+  double option application, and loopMessages keeps main's behavior.
+- provenanceForRequest attributes each sent message by identity/content:
+  original initial messages are caller content, exactly one system
+  message equal to the SDK tool prompt is the SDK prompt, everything else
+  is caller content. Position-independent, so prepend/append/insert/
+  reorder options all tag correctly.
+
+Tests: appending option, MaxTurns:0 single option application, plus the
+existing caller+SDK, identical-text, initial-not-doubled and
+no-replay cases.
+
+* fix(go-sdk): preserve tool request options and message provenance
+
+Build only requests that will be sent and retain message edits across turns.
+Track the SDK system message by content identity through caller options.
+Cover zero-turn replay, persisted edits, insertion, reordering and removal.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+* fix(python-sdk): exclude prompt formatters from JSON Schema
+
+Keep callable validation and serialization exclusion while restoring
+AIConfig schema generation and reasoner metadata. Add schema and public
+AgentAI payload regressions, with the LiteLLM call boundary mocked.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+* test(ts-sdk): pin default tool payloads through aiWithTools
+
+Exercise ReasonerContext with the real AI SDK and its mock model.
+Assert the outgoing default conversation and source-tagged tool results.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com>
+Co-authored-by: Claude Opus 5.5 (1M context) <noreply@anthropic.com> (d70e07c)
+
 ## [0.1.143-rc.3] - 2026-10-20
 
 
