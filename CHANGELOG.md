@@ -6,6 +6,59 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.143-rc.3] - 2026-10-20
+
+
+### Fixed
+
+- Fix(sdk/python): stop retrying permanent status callbacks (#1109)
+
+* fix(sdk/python): stop retrying execution status callbacks on non-retryable 4xx
+
+Align _post_execution_status with the Go SDK's postExecutionStatus:
+transport errors, 408, 429, and 5xx retry up to five times with 1+2+4+8s
+backoff and a 30s per-attempt timeout; every other HTTP status returns
+immediately. 404 is permanent now that #1086 persists the execution row.
+
+Refs #1088
+
+Co-authored-by: Steven Huang <remote-controlled-man@users.noreply.github.com>
+
+* fix(sdk/python): retry status callbacks only on transport failures
+
+Match Go postExecutionStatus: resend httpx.TransportError (including
+timeouts), the requests connection and timeout errors from the sync
+fallback, and HTTP 408, 429, and 5xx. Fail fast on request-construction
+and programming errors such as InvalidURL and TypeError.
+
+CancelledError still leaves the loop immediately. A permanent HTTP
+status is logged once, and the stale no-cover pragma on the handler
+is gone.
+
+Refs #1088
+
+Co-authored-by: Steven Huang <remote-controlled-man@users.noreply.github.com>
+
+* fix(sdk/python): retry interrupted callback response bodies
+
+* fix(control-plane): fail legacy dispatch on execution insert errors
+
+Return a structured 500 before reasoner or skill dispatch when the execution
+row cannot be persisted, including serverless nodes. Previously the insert
+failure was only logged and the call was dispatched anyway, so the agent's
+status callback could get a 404 that this PR now treats as permanent while
+a later workflow event created the row, leaving it running with no result.
+Cover insert failures and keep the persist-before-dispatch success path.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Cursor Agent <cursoragent@cursor.com>
+Co-authored-by: Steven Huang <remote-controlled-man@users.noreply.github.com>
+Co-authored-by: Abir Abbas <abirabbas1998@gmail.com>
+Co-authored-by: Claude Opus 5.5 (1M context) <noreply@anthropic.com> (b312ba5)
+
 ## [0.1.143-rc.2] - 2026-10-20
 
 
