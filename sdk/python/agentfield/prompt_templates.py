@@ -13,9 +13,10 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, Optional
+from typing import Annotated, Any, Callable, Dict, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic.json_schema import WithJsonSchema
 
 # The schema-adherence instruction appended to the system message when a
 # Pydantic output schema is in effect. ``{schema}`` is replaced (via
@@ -79,6 +80,8 @@ class PromptTemplates(BaseModel):
         app.ai_config.prompt_templates.schema_instruction = None
     """
 
+    # WithJsonSchema(None) omits callables from config and reasoner schemas
+    # while supporting the SDK's Pydantic 2.0 lower bound.
     # exclude=True on the callables keeps ai_config.model_dump_json() working
     # after a formatter is set; arbitrary_types_allowed lets Callable fields
     # hold plain functions and bound methods; validate_assignment makes the
@@ -111,7 +114,9 @@ class PromptTemplates(BaseModel):
         description="Message returned to the model when the tool-call limit is hit.",
     )
 
-    tool_error_formatter: Callable[[str, str], Any] = Field(
+    tool_error_formatter: Annotated[
+        Callable[[str, str], Any], WithJsonSchema(None)
+    ] = Field(
         default=default_tool_error_formatter,
         exclude=True,
         description=(
@@ -121,7 +126,9 @@ class PromptTemplates(BaseModel):
         ),
     )
 
-    tool_result_formatter: Callable[[str, Any], Any] = Field(
+    tool_result_formatter: Annotated[
+        Callable[[str, Any], Any], WithJsonSchema(None)
+    ] = Field(
         default=default_tool_result_formatter,
         exclude=True,
         description=(
