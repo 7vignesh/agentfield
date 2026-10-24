@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.143-rc.5] - 2026-10-24
+
+
+### Other
+
+- Make CodeAF the default harness, installed automatically with AgentField (#1128)
+
+CodeAF (the renamed aforge-v2) becomes the default harness in the Python, Go and TypeScript SDKs. A provider-less harness call runs `codeaf exec --json` headless. CodeAF v0.8.2 is pinned and sha256-verified, and it is installed by install.sh/install.ps1, desktop launch, af skill install, af install, the agent and cloud images, `af codeaf ensure`, and a lazy first-call download in each SDK.
+
+`provider="aforge"` is an alias that runs CodeAF. Legacy pins (AFORGE_BIN, aforge_bin, aforgeBin, Go BinPath) keep the original aforge adapter, and AGENTFIELD_AFORGE_COMMAND / AFORGE_MODEL are honored as fallbacks.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com> (647e31c)
+
 ## [0.1.143-rc.4] - 2026-10-20
 
 
