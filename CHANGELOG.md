@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.144-rc.1] - 2026-10-26
+
+
+### Fixed
+
+- Fix(sdk/typescript): stop retrying permanent status callbacks (#1126)
+
+Align reportExecutionResult and updateExecutionStatus with the Go SDK's
+postExecutionStatus: retry transport errors, 408, 429 and 5xx with
+1+2+4+8s backoff, and fail fast on any other status (e.g. a 409
+terminal-status conflict). Each attempt is signed with a fresh DID
+timestamp/nonce instead of reusing one signature across retries.
+
+Fixes #1088
+
+Signed-off-by: ShryukGrandhi <85529990+ShryukGrandhi@users.noreply.github.com> (7004561)
+
 ## [0.1.143] - 2026-10-24
 
 ## [0.1.143-rc.5] - 2026-10-24
