@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.144-rc.2] - 2026-10-26
+
+
+### Fixed
+
+- Fix(sdk): fail fast with a clear message when the CodeAF harness has no model key (#1130)
+
+When CodeAF (the default harness provider) has no model key it could use, the Python, Go and TypeScript SDKs now refuse the call before resolving, downloading or launching CodeAF, with a message that names OPENROUTER_API_KEY and how to pick another provider (HarnessProviderNotConfigured / ProviderUnavailableError{NotConfigured}), and warn once per process and at Agent construction. The check mirrors CodeAF's own key ladder and lets the call through whenever it cannot be sure. Keyless launches no longer reach CodeAF, so they stop being counted as failed CodeAF sessions.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com> (27bc3a1)
+
 ## [0.1.144-rc.1] - 2026-10-26
 
 
