@@ -6,6 +6,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.144-rc.3] - 2026-10-26
+
+
+### Chores
+
+- Chore(deps): bump the uv group across 1 directory with 3 updates (#1127)
+
+---
+updated-dependencies:
+- dependency-name: aiohttp
+  dependency-version: 3.14.4
+  dependency-type: direct:production
+- dependency-name: claude-agent-sdk
+  dependency-version: 0.2.121
+  dependency-type: direct:production
+- dependency-name: mcp
+  dependency-version: 1.30.0
+  dependency-type: indirect
+...
+
+Signed-off-by: dependabot[bot] <support@github.com>
+Co-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com> (9780d03)
+
 ## [0.1.144-rc.2] - 2026-10-26
 
 
