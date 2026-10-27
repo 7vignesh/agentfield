@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 <!-- changelog:entries -->
 
+## [0.1.145-rc.1] - 2026-10-27
+
+
+### Fixed
+
+- Fix(sdk): log the CodeAF missing-key warning once, and count the harness config's env (#1132)
+
+Agent construction and call-time refusal now share one warning per process in the Python, Go and TypeScript SDKs, and the construction check reads the same effective environment the harness calls use (the process environment overlaid with the harness config's env map). This removes the double warning for keyless agents, the false warning when the key is only in the config's env, and the missed warning when that env blanks a process key. Refusals and keyed calls are unchanged.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com> (d26f52d)
+
 ## [0.1.144] - 2026-10-27
 
 ## [0.1.144-rc.3] - 2026-10-26
